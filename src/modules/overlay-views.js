@@ -242,6 +242,6 @@ export function settingsView(state) {
           </dl>
         </aside>
       </div>
-      <button type="submit" class="apply-calibration" data-commit-settings><span>COMMIT RECEIVER CALIBRATION</span><b>ARRAY 7</b></button>
+      <button type="button" class="apply-calibration" data-commit-settings><span>COMMIT RECEIVER CALIBRATION</span><b>ARRAY 7</b></button>
     </form>`;
 }

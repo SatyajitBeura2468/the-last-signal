@@ -14,7 +14,7 @@ import { AudioEngine } from './modules/audio-engine.js';
 import { createStarfield } from './modules/starfield.js';
 import { SpectrumRenderer } from './modules/spectrum-renderer.js';
 import { createOperationsState, getOperationsLog, updateOperations } from './modules/operations.js';
-import { dashboardView, logbookView, settingsView, starmapView, transmissionsView } from './modules/overlay-views.js';
+import { dashboardView, logbookView, settingsView, starmapView, transmissionsView } from './modules/overlay-views.js?v=receiver-workspaces-3';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
