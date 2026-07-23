@@ -13,6 +13,7 @@ import {
 import { AudioEngine } from './modules/audio-engine.js';
 import { createStarfield } from './modules/starfield.js';
 import { SpectrumRenderer } from './modules/spectrum-renderer.js';
+import { createOperationsState, getOperationsLog, updateOperations } from './modules/operations.js';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -46,6 +47,8 @@ const state = {
   radio: createRadioState(),
   lastScanToast: 0,
   lockLostNotified: false,
+  operations: createOperationsState(),
+  lastRenderedEventNumber: 0,
 };
 
 const audio = new AudioEngine();
@@ -104,7 +107,7 @@ function createMiniWave() {
 function renderLogs() {
   $('#detection-log').innerHTML = state.logs.slice(0, 6).map((entry) => `
     <article>
-      <div><time>${entry.time}</time><strong>${entry.frequency}</strong></div>
+      <div><time>${entry.time}</time><strong>${entry.frequency}</strong>${entry.message ? `<small>${entry.message}</small>` : ''}</div>
       <div><b class="${entry.status.toLowerCase()}">${entry.status}</b>${createMiniWave()}</div>
     </article>`).join('');
 }
@@ -117,6 +120,25 @@ function addLog(signal, status = 'LOCKED') {
     status,
     id: signal?.id,
   });
+  state.logs = state.logs.slice(0, CONFIG.maxLogs);
+  renderLogs();
+  saveState(state);
+}
+
+function renderOperations(event = state.operations.currentEvent) {
+  const alert = $('#system-alert');
+  const icon = alert.querySelector('svg');
+  alert.dataset.severity = event.severity;
+  $('#system-alert-title').textContent = event.title;
+  $('#system-alert-message').textContent = event.message;
+  alert.setAttribute('aria-label', `${event.title}: ${event.message}`);
+  icon.setAttribute('aria-label', event.severity === 'critical' ? 'Critical alert' : 'Operational update');
+  $('#station-state').textContent = state.telemetry.interference > 0.72 ? 'DEGRADED' : event.severity === 'critical' ? 'CAUTION' : 'ONLINE';
+  $('#listening-copy').textContent = event.severity === 'signal' ? 'CARRIER IN LISTENING WINDOW' : event.severity === 'critical' ? 'PROTECTING RECEIVER' : 'LISTENING TO THE UNIVERSE';
+}
+
+function addOperationalLog(event) {
+  state.logs.unshift(getOperationsLog(event));
   state.logs = state.logs.slice(0, CONFIG.maxLogs);
   renderLogs();
   saveState(state);
@@ -223,6 +245,15 @@ function updateTelemetry(time) {
   state.telemetry = sampleTelemetry(state.frequencyMHz, state.signals, time, state.radio, {
     bandwidth: CONFIG.lockToleranceRatio * state.settings.sensitivity,
   });
+  const previousEventNumber = state.operations.eventNumber;
+  updateOperations(state.operations, time, state.telemetry, state.mode);
+  if (state.operations.eventNumber !== previousEventNumber && state.operations.lastEmittedEvent) {
+    const event = state.operations.lastEmittedEvent;
+    state.lastRenderedEventNumber = event.eventNumber;
+    renderOperations(event);
+    addOperationalLog(event);
+    if (event.severity === 'signal' || event.severity === 'critical') toast(event.message, event.severity === 'critical' ? 'warning' : 'success');
+  }
   const { strength, quality, stability, proximity } = state.telemetry;
   const detectedSignal = state.telemetry.signal;
 
@@ -266,10 +297,14 @@ function updateTelemetry(time) {
   state.buffer = clamp(61 + proximity * 28 + quality * 0.12 + (Math.random() - 0.5) * 7, 0, 100);
   $('#buffer-value').textContent = `${Math.round(state.buffer)}%`;
   $('#buffer-bar').style.width = `${state.buffer}%`;
-  $('#dish-value').textContent = `${clamp(84 + quality * 0.09 + (Math.random() - 0.5) * 1.8, 0, 100).toFixed(1)}%`;
-  $('#boost-value').textContent = `+${(16 + proximity * 19 + Math.random() * 2.5).toFixed(1)} dB`;
-  $('#power-value').textContent = `${clamp(92 + quality * 0.06 + (Math.random() - 0.5) * 1.2, 0, 100).toFixed(1)}%`;
-  $('#temp-value').textContent = `−${(195.2 + state.telemetry.interference * 2.4 + (Math.random() - 0.5) * 0.35).toFixed(1)} °C`;
+  $('#dish-value').textContent = `${state.operations.alignment.toFixed(1)}%`;
+  $('#dish-bar').style.setProperty('--value', `${state.operations.alignment}%`);
+  $('#boost-value').textContent = `+${state.operations.boost.toFixed(1)} dB`;
+  $('#boost-bar').style.setProperty('--value', `${clamp(state.operations.boost / 31 * 100, 0, 100)}%`);
+  $('#power-value').textContent = `${state.operations.power.toFixed(1)}%`;
+  $('#power-bar').style.setProperty('--value', `${state.operations.power}%`);
+  $('#temp-value').textContent = `${state.operations.temperature.toFixed(1)} °C`;
+  $('#temp-bar').style.setProperty('--value', `${clamp(100 - Math.abs(state.operations.temperature + 195) * 18, 0, 100)}%`);
   $('#bandwidth-value').textContent = `${state.telemetry.bandwidth.toFixed(1)} Hz`;
   audio.update({ ...state.telemetry, frequencyMHz: state.frequencyMHz });
 }
@@ -382,7 +417,7 @@ function overlayTableRows() {
 function dashboardMarkup() {
   const decoded = state.unlockedSignalIds.size;
   const last = state.logs[0];
-  return `<div class="dashboard-summary"><div class="dashboard-hero"><span>RECEIVER STATE</span><strong>${state.mode.toUpperCase()} / ${state.telemetry.quality}% QUALITY</strong><p>${state.telemetry.lockable ? 'A coherent carrier is inside the listening window.' : 'No stable carrier at the current frequency. Keep tuning.'}</p></div><div class="dashboard-stats"><article><span>LOCKS THIS SESSION</span><strong>${state.logs.filter((log) => log.status === 'LOCKED').length}</strong></article><article><span>ARCHIVE FRAGMENTS</span><strong>${decoded}</strong></article><article><span>LAST FREQUENCY</span><strong>${last?.frequency ?? '--'}</strong></article></div></div>`;
+  return `<div class="dashboard-summary"><div class="dashboard-hero"><span>RECEIVER STATE</span><strong>${state.mode.toUpperCase()} / ${state.telemetry.quality}% QUALITY</strong><p>${state.operations.currentEvent.message}</p></div><div class="dashboard-stats"><article><span>LOCKS THIS SESSION</span><strong>${state.logs.filter((log) => log.status === 'LOCKED').length}</strong></article><article><span>ARCHIVE FRAGMENTS</span><strong>${decoded}</strong></article><article><span>LAST FREQUENCY</span><strong>${last?.frequency ?? '--'}</strong></article><article><span>OPS EVENT ${state.operations.eventNumber}</span><strong>${state.operations.currentEvent.title}</strong></article></div></div>`;
 }
 
 function openView(view, button) {
@@ -453,6 +488,7 @@ async function boot() {
   renderLogs();
   renderTransmission();
   renderDecode();
+  renderOperations();
   bindControls();
   setMode('scan');
   setTimeout(() => {

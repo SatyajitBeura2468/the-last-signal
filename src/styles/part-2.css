@@ -4,6 +4,14 @@
 .system-alert strong { color: var(--red); font-size: 11px; }
 .system-alert span { color: #f05d56; margin-top: 5px; font-size: 10px; }
 .system-alert canvas { width: 220px; height: 26px; display: block; margin-top: 2px; }
+.system-alert[data-severity="nominal"] { border-color: rgba(38, 198, 170, .25); background: linear-gradient(180deg, rgba(3, 26, 27, .72), rgba(3, 11, 15, .64)); }
+.system-alert[data-severity="nominal"] svg { fill: rgba(52, 223, 189, .95); }
+.system-alert[data-severity="info"] { border-color: rgba(51, 169, 218, .3); background: linear-gradient(180deg, rgba(4, 23, 34, .78), rgba(3, 10, 16, .66)); }
+.system-alert[data-severity="info"] svg { fill: rgba(71, 213, 244, .95); }
+.system-alert[data-severity="signal"] { border-color: rgba(255, 183, 66, .36); background: linear-gradient(180deg, rgba(36, 22, 7, .78), rgba(10, 8, 5, .7)); }
+.system-alert[data-severity="signal"] svg { fill: rgba(255, 191, 77, .95); }
+.system-alert[data-severity="critical"] { animation: alert-breathe 1.6s ease-in-out infinite; }
+@keyframes alert-breathe { 50% { box-shadow: 0 0 30px rgba(255, 50, 43, .22); } }
 
 .console-grid { display: grid; grid-template-columns: 228px minmax(720px,1fr) 240px; gap: 14px; min-height: 0; }
 .left-rail { display: grid; grid-template-rows: 295px minmax(278px,1fr) 58px; gap: 10px; min-height: 0; }

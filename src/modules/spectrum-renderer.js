@@ -39,7 +39,7 @@ export class SpectrumRenderer {
     this.drawStability(state, time);
     this.drawTarget(state, time);
     this.drawNoise(state, time);
-    this.drawAlert(time);
+    this.drawAlert(state, time);
     this.frame += 1;
   }
 
@@ -156,19 +156,23 @@ export class SpectrumRenderer {
     ctx.clearRect(0, 0, width, height);
     ctx.strokeStyle = 'rgba(99,191,235,.62)'; ctx.lineWidth = .8; ctx.beginPath();
     for (let x = 0; x <= width; x += 2) {
-      const y = height / 2 + Math.sin(x * .31 + time * .003) * 3 + (Math.random() - .5) * 12;
+      const burst = state.telemetry.interference * Math.sin(x * 1.2 + time * .007) * 5;
+      const y = height / 2 + Math.sin(x * .31 + time * .003) * 3 + burst + (Math.random() - .5) * (8 + state.telemetry.interference * 14);
       if (!x) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
   }
 
-  drawAlert(time) {
+  drawAlert(state, time) {
     const { width, height, ctx } = sizeCanvas(this.alertCanvas);
     ctx.clearRect(0, 0, width, height);
-    ctx.strokeStyle = 'rgba(255,65,51,.8)'; ctx.lineWidth = 1; ctx.beginPath();
+    const severity = state.operations?.currentEvent?.severity;
+    const color = severity === 'critical' ? '255,65,51' : severity === 'signal' ? '255,190,74' : severity === 'info' ? '75,211,241' : '52,222,189';
+    const amplitude = severity === 'critical' ? 8 : severity === 'signal' ? 5.5 : severity === 'info' ? 3.5 : 2.2;
+    ctx.strokeStyle = `rgba(${color},.86)`; ctx.lineWidth = 1; ctx.beginPath();
     for (let x = 0; x <= width; x += 2) {
-      const spike = x > width * .58 && x < width * .7 ? Math.sin(x * 1.6) * 5 : 0;
-      const y = height / 2 + Math.sin(x * .09 + time * .004) * 2 + spike;
+      const spike = state.telemetry.interference > .25 && x > width * .48 && x < width * .74 ? Math.sin(x * 1.6 + time * .012) * amplitude : 0;
+      const y = height / 2 + Math.sin(x * .09 + time * .004) * amplitude * .32 + spike + (Math.random() - .5) * amplitude * .24;
       if (!x) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
