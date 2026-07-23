@@ -1,0 +1,15 @@
+{
+  "name": "the-last-signal",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A cinematic, interactive deep-space signal hunting experience.",
+  "scripts": {
+    "dev": "node dev-server.mjs",
+    "start": "node dev-server.mjs",
+    "check": "node scripts/check.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
