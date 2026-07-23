@@ -520,10 +520,16 @@ function renderActiveView() {
     content.innerHTML = settingsView(state);
     const form = $('.settings-console');
     const range = $('#setting-sensitivity');
+    const commitButton = $('[data-commit-settings]');
     range.addEventListener('input', () => {
       $('#sensitivity-readout').textContent = `${Number(range.value).toFixed(1)}×`;
       $('.scope-rings b').style.setProperty('--spread', range.value);
       $$('.profile-selector button').forEach((button) => button.classList.remove('active'));
+    });
+    commitButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      commitReceiverSettings();
     });
     form.addEventListener('submit', (event) => {
       event.preventDefault();
