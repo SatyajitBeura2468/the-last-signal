@@ -14,6 +14,7 @@ import { AudioEngine } from './modules/audio-engine.js';
 import { createStarfield } from './modules/starfield.js';
 import { SpectrumRenderer } from './modules/spectrum-renderer.js';
 import { createOperationsState, getOperationsLog, updateOperations } from './modules/operations.js';
+import { dashboardView, logbookView, settingsView, starmapView, transmissionsView } from './modules/overlay-views.js';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -49,6 +50,13 @@ const state = {
   lockLostNotified: false,
   operations: createOperationsState(),
   lastRenderedEventNumber: 0,
+  activeOverlayView: null,
+  selectedSignalId: null,
+  selectedMapSignalId: null,
+  logFilter: 'all',
+  selectedLogIndex: 0,
+  lastOverlayRefresh: 0,
+  overlayCloseTimer: null,
 };
 
 const audio = new AudioEngine();
@@ -65,6 +73,12 @@ createStarfield($('#starfield'));
 
 function toast(message, tone = 'info') {
   const region = $('#toast-region');
+  const duplicate = [...region.children].find((child) => child.textContent === message);
+  if (duplicate) {
+    duplicate.classList.remove('show');
+    requestAnimationFrame(() => duplicate.classList.add('show'));
+    return;
+  }
   const node = document.createElement('div');
   node.className = `toast ${tone}`;
   node.textContent = message;
@@ -142,6 +156,7 @@ function addOperationalLog(event) {
   state.logs = state.logs.slice(0, CONFIG.maxLogs);
   renderLogs();
   saveState(state);
+  if (state.activeOverlayView === 'logbook' && !$('#overlay').hidden) renderActiveView();
 }
 
 function renderTransmission(signal = null) {
@@ -241,6 +256,38 @@ async function decodeSignal() {
   run();
 }
 
+function refreshActiveOverlay(time) {
+  if ($('#overlay').hidden || time - state.lastOverlayRefresh < 240) return;
+  state.lastOverlayRefresh = time;
+  if (state.activeOverlayView === 'dashboard') {
+    const event = state.operations.currentEvent;
+    const signal = state.lockedSignal ?? (state.telemetry.lockable ? state.telemetry.signal : null);
+    const assignments = {
+      '#dash-event-title': event.title,
+      '#dash-event-message': event.message,
+      '#dash-live-clock': `${new Date().toLocaleTimeString('en-GB', { hour12: false })} UTC`,
+      '#dash-array-state': state.mode.toUpperCase(),
+      '#dash-activity': signal ? `${signal.id} / ${signal.className}` : 'DEEP FIELD SWEEP',
+      '#dash-strength': `${state.telemetry.strength.toFixed(1)} dBm`,
+      '#dash-quality': `${state.telemetry.quality}%`,
+      '#dash-stability': `${state.telemetry.stability}%`,
+      '#dash-noise': `${state.telemetry.noiseFloor?.toFixed(0) ?? '−106'} dBm`,
+      '#dash-alignment': `${state.operations.alignment.toFixed(1)}%`,
+      '#dash-frequency': state.frequencyMHz >= 1000 ? `${(state.frequencyMHz / 1000).toFixed(6)} GHz` : `${state.frequencyMHz.toFixed(6)} MHz`,
+      '#dash-event-number': String(state.operations.eventNumber).padStart(3, '0'),
+    };
+    Object.entries(assignments).forEach(([selector, value]) => {
+      const node = $(selector);
+      if (node) node.textContent = value;
+    });
+    $('.command-brief')?.setAttribute('data-severity', event.severity);
+    $('#dash-confidence')?.style.setProperty('width', `${state.telemetry.quality}%`);
+  } else if (state.activeOverlayView === 'starmap') {
+    const clock = $('#map-solution-clock');
+    if (clock) clock.textContent = `${new Date().toLocaleTimeString('en-GB', { hour12: false })} UTC`;
+  }
+}
+
 function updateTelemetry(time) {
   state.telemetry = sampleTelemetry(state.frequencyMHz, state.signals, time, state.radio, {
     bandwidth: CONFIG.lockToleranceRatio * state.settings.sensitivity,
@@ -307,6 +354,7 @@ function updateTelemetry(time) {
   $('#temp-bar').style.setProperty('--value', `${clamp(100 - Math.abs(state.operations.temperature + 195) * 18, 0, 100)}%`);
   $('#bandwidth-value').textContent = `${state.telemetry.bandwidth.toFixed(1)} Hz`;
   audio.update({ ...state.telemetry, frequencyMHz: state.frequencyMHz });
+  refreshActiveOverlay(time);
 }
 
 function animate(time) {
@@ -396,9 +444,60 @@ function bindControls() {
   $('#overlay-close').addEventListener('click', closeOverlay);
   $('#overlay').addEventListener('click', (event) => {
     if (event.target === $('#overlay')) closeOverlay();
-    const signalButton = event.target.closest('[data-signal-id]');
-    if (signalButton) {
-      const signal = state.signals.find((candidate) => candidate.id === signalButton.dataset.signalId);
+    const command = event.target.closest('[data-command]')?.dataset.command;
+    if (command === 'scan') {
+      closeOverlay();
+      state.lastScanToast = 0;
+      setMode('scan');
+      toast('Deep field sweep resumed from the command deck.', 'info');
+      return;
+    }
+    if (command) {
+      openView(command, $(`.main-nav [data-view="${command}"]`));
+      return;
+    }
+    const inspectSignal = event.target.closest('[data-inspect-signal]')?.dataset.inspectSignal;
+    if (inspectSignal) {
+      state.selectedSignalId = inspectSignal;
+      renderActiveView();
+      return;
+    }
+    const mapSignal = event.target.closest('[data-map-signal]')?.dataset.mapSignal;
+    if (mapSignal) {
+      state.selectedMapSignalId = mapSignal;
+      renderActiveView();
+      return;
+    }
+    const logFilter = event.target.closest('[data-log-filter]')?.dataset.logFilter;
+    if (logFilter) {
+      state.logFilter = logFilter;
+      state.selectedLogIndex = 0;
+      renderActiveView();
+      return;
+    }
+    const logIndex = event.target.closest('[data-log-index]')?.dataset.logIndex;
+    if (logIndex !== undefined) {
+      state.selectedLogIndex = Number(logIndex);
+      renderActiveView();
+      return;
+    }
+    const profile = event.target.closest('[data-sensitivity]');
+    if (profile) {
+      const range = $('#setting-sensitivity');
+      range.value = profile.dataset.sensitivity;
+      $('#sensitivity-readout').textContent = `${Number(range.value).toFixed(1)}×`;
+      $$('.profile-selector button').forEach((button) => button.classList.toggle('active', button === profile));
+      $('.scope-rings b').style.setProperty('--spread', range.value);
+      return;
+    }
+    if (event.target.closest('[data-commit-settings]')) {
+      event.preventDefault();
+      commitReceiverSettings();
+      return;
+    }
+    const tuneSignalId = event.target.closest('[data-tune-signal]')?.dataset.tuneSignal;
+    if (tuneSignalId) {
+      const signal = state.signals.find((candidate) => candidate.id === tuneSignalId);
       if (signal) tuneToSignal(signal);
     }
   });
@@ -406,18 +505,31 @@ function bindControls() {
   $('#view-all-logs').addEventListener('click', () => openView('logbook', $('.main-nav [data-view="logbook"]')));
 }
 
-function overlayTableRows() {
-  return state.logs.map((log) => {
-    const signal = state.signals.find((candidate) => candidate.id === log.id);
-    const action = signal ? ` data-signal-id="${signal.id}"` : '';
-    return `<tr${action}><td>${log.time}</td><td>${log.frequency}</td><td><span class="table-status ${log.status.toLowerCase()}">${log.status}</span></td><td>${log.id ?? 'UNCLASSIFIED'}</td></tr>`;
-  }).join('');
-}
-
-function dashboardMarkup() {
-  const decoded = state.unlockedSignalIds.size;
-  const last = state.logs[0];
-  return `<div class="dashboard-summary"><div class="dashboard-hero"><span>RECEIVER STATE</span><strong>${state.mode.toUpperCase()} / ${state.telemetry.quality}% QUALITY</strong><p>${state.operations.currentEvent.message}</p></div><div class="dashboard-stats"><article><span>LOCKS THIS SESSION</span><strong>${state.logs.filter((log) => log.status === 'LOCKED').length}</strong></article><article><span>ARCHIVE FRAGMENTS</span><strong>${decoded}</strong></article><article><span>LAST FREQUENCY</span><strong>${last?.frequency ?? '--'}</strong></article><article><span>OPS EVENT ${state.operations.eventNumber}</span><strong>${state.operations.currentEvent.title}</strong></article></div></div>`;
+function renderActiveView() {
+  const content = $('#overlay-content');
+  if (!state.activeOverlayView || !content) return;
+  if (state.activeOverlayView === 'dashboard') {
+    content.innerHTML = dashboardView(state);
+  } else if (state.activeOverlayView === 'transmissions') {
+    content.innerHTML = transmissionsView(state, state.selectedSignalId);
+  } else if (state.activeOverlayView === 'starmap') {
+    content.innerHTML = starmapView(state, state.selectedMapSignalId);
+  } else if (state.activeOverlayView === 'logbook') {
+    content.innerHTML = logbookView(state, state.logFilter, state.selectedLogIndex);
+  } else if (state.activeOverlayView === 'settings') {
+    content.innerHTML = settingsView(state);
+    const form = $('.settings-console');
+    const range = $('#setting-sensitivity');
+    range.addEventListener('input', () => {
+      $('#sensitivity-readout').textContent = `${Number(range.value).toFixed(1)}×`;
+      $('.scope-rings b').style.setProperty('--spread', range.value);
+      $$('.profile-selector button').forEach((button) => button.classList.remove('active'));
+    });
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      commitReceiverSettings();
+    });
+  }
 }
 
 function openView(view, button) {
@@ -427,32 +539,18 @@ function openView(view, button) {
     setMode('scan');
     return;
   }
+  state.activeOverlayView = view;
+  if (view === 'transmissions' && !state.selectedSignalId) state.selectedSignalId = state.lockedSignal?.id ?? state.signals[0]?.id;
+  if (view === 'starmap' && !state.selectedMapSignalId) state.selectedMapSignalId = state.lockedSignal?.id ?? state.signals[0]?.id;
   const overlay = $('#overlay');
-  const title = $('#overlay-title');
-  const content = $('#overlay-content');
-  $('#overlay-kicker').textContent = 'DEEP SPACE ARRAY 7';
-  title.textContent = view.toUpperCase();
-  if (view === 'dashboard') {
-    content.innerHTML = dashboardMarkup();
-  } else if (view === 'transmissions') {
-    content.innerHTML = `<div class="archive-grid">${state.signals.map((signal) => `<button class="archive-card ${state.unlockedSignalIds.has(signal.id) ? 'unlocked' : ''}" data-signal-id="${signal.id}"><span>${signal.className}</span><h3>${signal.id}</h3><p>${(signal.frequencyMHz / 1000).toFixed(6)} GHz</p><dl><div><dt>Distance</dt><dd>${signal.distance.toLocaleString()} ly</dd></div><div><dt>Status</dt><dd>${state.unlockedSignalIds.has(signal.id) ? 'DECODED' : 'UNRESOLVED'}</dd></div></dl><small>CLICK TO TUNE</small></button>`).join('')}</div>`;
-  } else if (view === 'starmap') {
-    content.innerHTML = `<div class="full-starmap"><div class="map-orbit o1"></div><div class="map-orbit o2"></div><div class="map-orbit o3"></div>${state.signals.map((signal, index) => `<button data-signal-id="${signal.id}" style="--x:${23 + index * 24}%;--y:${60 - index * 17}%" title="Tune to ${signal.id}"><i></i><span>${signal.id}<small>${signal.ra} / ${signal.dec}</small></span></button>`).join('')}</div>`;
-  } else if (view === 'logbook') {
-    content.innerHTML = `<div class="table-wrap"><table><thead><tr><th>TIME</th><th>FREQUENCY</th><th>STATUS</th><th>IDENTIFIER</th></tr></thead><tbody>${overlayTableRows()}</tbody></table></div>`;
-  } else if (view === 'settings') {
-    content.innerHTML = `<form class="settings-form"><label><span>PROCEDURAL AUDIO<small>Static, carrier tones and lock cues</small></span><input id="setting-audio" type="checkbox" ${state.settings.audio ? 'checked' : ''}></label><label><span>REDUCED MOTION<small>Disable automatic frequency sweep</small></span><input id="setting-motion" type="checkbox" ${state.settings.reducedMotion ? 'checked' : ''}></label><label class="range-label"><span>LOCK SENSITIVITY<small>Receiver tolerance around coherent carriers</small></span><input id="setting-sensitivity" type="range" min="0.6" max="1.8" step="0.1" value="${state.settings.sensitivity}"></label><button type="submit" class="outline-button">APPLY RECEIVER CONFIGURATION</button></form>`;
-    $('.settings-form').addEventListener('submit', (event) => {
-      event.preventDefault();
-      state.settings.audio = $('#setting-audio').checked;
-      state.settings.reducedMotion = $('#setting-motion').checked;
-      state.settings.sensitivity = Number($('#setting-sensitivity').value);
-      audio.setEnabled(state.settings.audio);
-      saveState(state);
-      toast('Receiver configuration applied.', 'success');
-      closeOverlay();
-    });
+  if (state.overlayCloseTimer) {
+    clearTimeout(state.overlayCloseTimer);
+    state.overlayCloseTimer = null;
   }
+  overlay.dataset.view = view;
+  $('#overlay-kicker').textContent = view === 'dashboard' ? 'ARRAY COMMAND DECK' : view === 'transmissions' ? 'DEEP FIELD ARCHIVE' : view === 'starmap' ? 'CELESTIAL NAVIGATION' : view === 'logbook' ? 'SESSION MEMORY' : 'RECEIVER CONTROL';
+  $('#overlay-title').textContent = view.toUpperCase();
+  renderActiveView();
   overlay.hidden = false;
   requestAnimationFrame(() => overlay.classList.add('visible'));
 }
@@ -460,7 +558,23 @@ function openView(view, button) {
 function closeOverlay() {
   const overlay = $('#overlay');
   overlay.classList.remove('visible');
-  setTimeout(() => { overlay.hidden = true; }, 240);
+  if (state.overlayCloseTimer) clearTimeout(state.overlayCloseTimer);
+  state.overlayCloseTimer = setTimeout(() => {
+    overlay.hidden = true;
+    state.overlayCloseTimer = null;
+  }, 240);
+}
+
+function commitReceiverSettings() {
+  const range = $('#setting-sensitivity');
+  state.settings.audio = $('#setting-audio').checked;
+  state.settings.reducedMotion = $('#setting-motion').checked;
+  state.settings.sensitivity = Number(range.value);
+  audio.setEnabled(state.settings.audio);
+  document.documentElement.classList.toggle('motion-reduced', state.settings.reducedMotion);
+  saveState(state);
+  toast('Receiver calibration committed to Array 7.', 'success');
+  closeOverlay();
 }
 
 function updateSessionTime() {

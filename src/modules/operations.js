@@ -110,8 +110,9 @@ export function getOperationsLog(event) {
     time: new Date().toLocaleTimeString('en-GB', { hour12: false }),
     frequency: event.signalId ? 'CARRIER' : 'OPS EVENT',
     status: event.severity.toUpperCase(),
-    id: event.title,
+    id: event.signalId ?? event.title,
+    title: event.title,
     message: event.message,
-    operational: true,
+    operational: !event.signalId,
   };
 }
