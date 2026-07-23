@@ -8,7 +8,15 @@
 
 ## Live experience
 
-The production Vercel URL will be added after the first deployment.
+<p align="center">
+  <a href="https://the-last-signal-eosin.vercel.app/">
+    <img src="https://img.shields.io/badge/ENTER_THE_LAST_SIGNAL-07111f?style=for-the-badge&logo=vercel&logoColor=8ff5d2&labelColor=07111f&color=18384a" alt="Enter The Last Signal" />
+  </a>
+</p>
+
+> **[Launch the live receiver →](https://the-last-signal-eosin.vercel.app/)**
+
+The production experience is deployed on Vercel and ready to explore in the browser.
 
 ## Core systems
 

@@ -1,7 +1,8 @@
 import { readFile, stat } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
-const root = new URL('..', import.meta.url).pathname;
+const root = fileURLToPath(new URL('..', import.meta.url));
 const required = ['index.html', 'src/app.js', 'src/styles.css', 'api/signals.js', 'api/decode.js', 'api/session.js', 'vercel.json', 'README.md'];
 for (const path of required) await stat(join(root, path));
 const html = await readFile(join(root, 'index.html'), 'utf8');
