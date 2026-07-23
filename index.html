@@ -7,11 +7,22 @@
   <meta name="description" content="Scan the silence between stars and uncover a transmission older than recorded history." />
   <title>The Last Signal</title>
   <link rel="icon" href="/public/favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/src/styles.css?v=receiver-workspaces-3" />
+  <link rel="stylesheet" href="/src/styles.css?v=orbital-observatory-4" />
 </head>
 <body>
   <canvas id="starfield" aria-hidden="true"></canvas>
   <div class="cosmic-backdrop" aria-hidden="true">
+    <div class="observatory-sky"></div>
+    <div class="sky-depth depth-far"></div>
+    <div class="sky-depth depth-near"></div>
+    <div class="accretion-bloom"></div>
+    <div class="orbital-telemetry">
+      <i class="orbit-trace trace-a"></i>
+      <i class="orbit-trace trace-b"></i>
+      <i class="orbit-trace trace-c"></i>
+      <span class="sky-pulse pulse-a"></span>
+      <span class="sky-pulse pulse-b"></span>
+    </div>
     <div class="nebula nebula-left"></div>
     <div class="nebula nebula-right"></div>
     <div class="eclipse"></div>
@@ -170,6 +181,6 @@
   </div>
 
   <div id="toast-region" class="toast-region" aria-live="polite"></div>
-  <script type="module" src="/src/app.js?v=receiver-workspaces-4"></script>
+  <script type="module" src="/src/app.js?v=orbital-observatory-1"></script>
 </body>
 </html>

@@ -11,7 +11,7 @@ import {
   sampleTelemetry,
 } from './modules/signal-engine.js';
 import { AudioEngine } from './modules/audio-engine.js';
-import { createStarfield } from './modules/starfield.js';
+import { createStarfield } from './modules/starfield.js?v=orbital-observatory-1';
 import { SpectrumRenderer } from './modules/spectrum-renderer.js';
 import { createOperationsState, getOperationsLog, updateOperations } from './modules/operations.js';
 import { dashboardView, logbookView, settingsView, starmapView, transmissionsView } from './modules/overlay-views.js?v=receiver-workspaces-3';
@@ -57,6 +57,7 @@ const state = {
   selectedLogIndex: 0,
   lastOverlayRefresh: 0,
   overlayCloseTimer: null,
+  nextAtmosphereUpdate: 0,
 };
 
 const audio = new AudioEngine();
@@ -288,6 +289,26 @@ function refreshActiveOverlay(time) {
   }
 }
 
+function refreshAtmosphere(time) {
+  if (time < state.nextAtmosphereUpdate) return;
+  const quality = clamp(state.telemetry.quality / 100, 0, 1);
+  const stability = clamp(state.telemetry.stability / 100, 0, 1);
+  const energy = clamp(.12 + quality * .48 + stability * .18 + Math.random() * .12, .1, .86);
+  const root = document.documentElement;
+  root.style.setProperty('--sky-energy', energy.toFixed(3));
+  root.style.setProperty('--signal-bearing', `${(logFrequency(state.frequencyMHz) * 320 - 160).toFixed(2)}deg`);
+  document.body.dataset.receiverActivity = state.decoding
+    ? 'decoding'
+    : state.lockedSignal
+      ? 'locked'
+      : state.telemetry.lockable
+        ? 'carrier'
+        : state.scanning
+          ? 'scanning'
+          : 'listening';
+  state.nextAtmosphereUpdate = time + 620 + Math.random() * 1280;
+}
+
 function updateTelemetry(time) {
   state.telemetry = sampleTelemetry(state.frequencyMHz, state.signals, time, state.radio, {
     bandwidth: CONFIG.lockToleranceRatio * state.settings.sensitivity,
@@ -354,6 +375,7 @@ function updateTelemetry(time) {
   $('#temp-bar').style.setProperty('--value', `${clamp(100 - Math.abs(state.operations.temperature + 195) * 18, 0, 100)}%`);
   $('#bandwidth-value').textContent = `${state.telemetry.bandwidth.toFixed(1)} Hz`;
   audio.update({ ...state.telemetry, frequencyMHz: state.frequencyMHz });
+  refreshAtmosphere(time);
   refreshActiveOverlay(time);
 }
 

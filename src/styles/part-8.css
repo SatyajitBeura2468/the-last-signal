@@ -1,0 +1,752 @@
+/* Orbital Observatory visual system
+   This layer intentionally changes presentation only. Receiver geometry,
+   control ownership, and interaction state remain defined by the earlier layers. */
+
+:root {
+  --bg: #010203;
+  --panel: rgba(3, 11, 14, .78);
+  --panel-strong: rgba(2, 8, 10, .93);
+  --line: rgba(105, 190, 205, .3);
+  --line-bright: rgba(93, 222, 235, .52);
+  --text: #dce8e8;
+  --muted: #829ba0;
+  --cyan: #36dbe8;
+  --teal: #43ebc9;
+  --amber: #dda641;
+  --red: #ff6458;
+  --radius: 8px;
+  --shadow:
+    0 24px 70px rgba(0, 0, 0, .5),
+    0 6px 18px rgba(0, 0, 0, .28),
+    inset 0 1px rgba(218, 250, 255, .025);
+}
+
+html,
+body {
+  background: #010203;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 0, transparent 0 27%, rgba(0, 0, 0, .05) 48%, rgba(0, 0, 0, .34) 100%),
+    linear-gradient(180deg, transparent 0 22%, rgba(1, 3, 4, .06) 38%, rgba(1, 3, 4, .36) 100%);
+}
+
+#starfield {
+  z-index: 1;
+  opacity: .88;
+  mix-blend-mode: screen;
+}
+
+.cosmic-backdrop {
+  z-index: 0;
+  background: #010203;
+  isolation: isolate;
+}
+
+.cosmic-backdrop::after {
+  z-index: 8;
+  background:
+    radial-gradient(ellipse at center top, transparent 0 30%, rgba(0, 0, 0, .04) 48%, rgba(0, 0, 0, .22) 82%),
+    linear-gradient(180deg, rgba(0, 0, 0, .01), rgba(0, 0, 0, .06) 31%, rgba(0, 0, 0, .34) 88%, #010203);
+}
+
+.observatory-sky {
+  position: absolute;
+  z-index: 1;
+  inset: -3vh -2vw auto;
+  height: min(52vw, 650px);
+  min-height: 390px;
+  background-image: url("/public/black-hole-observatory.png");
+  background-repeat: no-repeat;
+  background-position: center 14%;
+  background-size: cover;
+  opacity: .96;
+  filter: saturate(.86) contrast(1.06) brightness(.9);
+  transform: translate3d(calc((var(--sky-x, .5) - .5) * -7px), calc((var(--sky-y, .5) - .5) * -4px), 0) scale(1.025);
+  transform-origin: 50% 20%;
+  mask-image: linear-gradient(180deg, #000 0 56%, rgba(0, 0, 0, .84) 72%, transparent 100%);
+  animation: sky-breathe 16s ease-in-out infinite alternate;
+}
+
+.sky-depth {
+  position: absolute;
+  z-index: 2;
+  inset: -10%;
+  opacity: .34;
+  mix-blend-mode: screen;
+  will-change: transform;
+}
+
+.depth-far {
+  background-image:
+    radial-gradient(circle at 13% 16%, rgba(180, 224, 244, .9) 0 1px, transparent 1.6px),
+    radial-gradient(circle at 68% 11%, rgba(255, 218, 157, .75) 0 .8px, transparent 1.5px),
+    radial-gradient(circle at 84% 28%, rgba(188, 232, 248, .7) 0 1px, transparent 1.7px);
+  background-size: 197px 181px, 263px 229px, 311px 277px;
+  animation: far-drift 95s linear infinite;
+}
+
+.depth-near {
+  background:
+    radial-gradient(ellipse at 12% 16%, rgba(43, 95, 111, .18), transparent 30%),
+    radial-gradient(ellipse at 87% 12%, rgba(124, 78, 36, .13), transparent 27%);
+  filter: blur(2px);
+  animation: near-drift 38s ease-in-out infinite alternate;
+}
+
+.accretion-bloom {
+  position: absolute;
+  z-index: 3;
+  top: 76px;
+  left: 50%;
+  width: min(58vw, 900px);
+  height: 155px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(226, 177, 103, .15), rgba(132, 89, 40, .04) 44%, transparent 72%);
+  filter: blur(20px);
+  opacity: calc(.55 + var(--sky-energy, .2) * .22);
+  animation: accretion-pulse 11s ease-in-out infinite;
+}
+
+.orbital-telemetry {
+  position: absolute;
+  z-index: 4;
+  top: -165px;
+  left: 50%;
+  width: 650px;
+  height: 650px;
+  transform: translateX(-50%);
+  opacity: .2;
+  pointer-events: none;
+}
+
+.orbit-trace {
+  position: absolute;
+  inset: var(--inset);
+  border: 1px solid rgba(111, 215, 229, .22);
+  border-left-color: transparent;
+  border-bottom-color: rgba(219, 170, 92, .12);
+  border-radius: 50%;
+  animation: orbit-trace var(--duration) linear infinite;
+}
+
+.trace-a { --inset: 15%; --duration: 39s; }
+.trace-b { --inset: 24%; --duration: 28s; animation-direction: reverse; opacity: .65; }
+.trace-c { --inset: 34%; --duration: 19s; opacity: .42; }
+
+.sky-pulse {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #ccecf0;
+  box-shadow: 0 0 8px 2px rgba(93, 220, 233, .5);
+  animation: sky-pulse 4.7s ease-out infinite;
+}
+
+.pulse-a { top: 58%; left: 15%; }
+.pulse-b { top: 42%; right: 14%; animation-delay: -2.9s; }
+
+.nebula {
+  z-index: 2;
+  opacity: .1;
+  filter: blur(28px);
+}
+
+.eclipse {
+  display: none;
+}
+
+.film-grain {
+  z-index: 9;
+  opacity: .026;
+  mix-blend-mode: soft-light;
+}
+
+.app-shell {
+  z-index: 3;
+  grid-template-rows: 205px minmax(0, 1fr) 70px;
+  padding: 18px 17px 0;
+}
+
+.glass-soft,
+.panel {
+  position: relative;
+  background:
+    linear-gradient(145deg, rgba(17, 39, 43, .31), transparent 34%),
+    linear-gradient(180deg, rgba(3, 13, 16, .84), rgba(1, 7, 9, .81));
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px) saturate(1.18);
+  -webkit-backdrop-filter: blur(18px) saturate(1.18);
+}
+
+.panel {
+  border-radius: var(--radius);
+}
+
+.panel::before,
+.glass-soft::before {
+  content: "";
+  position: absolute;
+  z-index: 12;
+  left: 8%;
+  right: 34%;
+  top: -1px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(190, 241, 246, .34), transparent);
+  opacity: .55;
+  transform: translateX(-125%);
+  animation: glass-glint var(--glint-speed, 13s) ease-in-out infinite;
+  animation-delay: var(--glint-delay, -3s);
+}
+
+.left-rail .panel:nth-child(2),
+.mode-bar,
+.transmission-panel {
+  --glint-speed: 17s;
+  --glint-delay: -9s;
+}
+
+.right-rail,
+.live-spectrum-panel {
+  --glint-speed: 19s;
+  --glint-delay: -14s;
+}
+
+.hero-header {
+  grid-template-columns: 275px 1fr 320px;
+  gap: 18px;
+}
+
+.station-id,
+.system-alert {
+  margin-top: 1px;
+  animation: instrument-float 8.4s ease-in-out infinite;
+}
+
+.station-id {
+  padding: 13px 15px;
+  border-color: rgba(94, 184, 200, .26);
+  background:
+    linear-gradient(110deg, rgba(7, 22, 26, .72), rgba(2, 7, 9, .42)),
+    rgba(0, 0, 0, .2);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .38), inset 0 1px rgba(201, 248, 255, .035);
+}
+
+.station-logo {
+  color: #67dfeb;
+  filter: drop-shadow(0 0 11px rgba(65, 211, 228, .32));
+}
+
+.station-id strong {
+  color: #eef5f3;
+}
+
+.station-id span {
+  color: #82969a;
+}
+
+.title-block {
+  padding-top: 68px;
+}
+
+.title-block h1 {
+  color: #e3e8e5;
+  font-size: clamp(42px, 4.3vw, 66px);
+  font-weight: 280;
+  letter-spacing: .255em;
+  text-shadow:
+    0 2px 18px rgba(0, 0, 0, .9),
+    0 0 24px rgba(221, 168, 88, .09);
+}
+
+.title-block p {
+  margin-top: 24px;
+  color: #849da1;
+  text-shadow: 0 2px 9px #000;
+}
+
+.title-block p strong {
+  color: #48dbe1;
+}
+
+.system-alert {
+  padding: 13px 15px 9px;
+  border-color: rgba(158, 90, 64, .24);
+  background: linear-gradient(145deg, rgba(24, 9, 8, .65), rgba(3, 7, 8, .56));
+  animation-delay: -3.6s;
+}
+
+.system-alert[data-severity="nominal"] {
+  border-color: rgba(67, 207, 177, .27);
+  background: linear-gradient(145deg, rgba(5, 28, 25, .58), rgba(2, 8, 9, .52));
+}
+
+.system-alert[data-severity="info"] {
+  border-color: rgba(68, 171, 202, .28);
+  background: linear-gradient(145deg, rgba(5, 23, 30, .62), rgba(2, 8, 10, .54));
+}
+
+.system-alert[data-severity="signal"] {
+  border-color: rgba(220, 167, 70, .32);
+  background: linear-gradient(145deg, rgba(33, 22, 8, .62), rgba(7, 8, 7, .55));
+}
+
+.console-grid {
+  grid-template-columns: 228px minmax(720px, 1fr) 240px;
+  gap: 12px;
+}
+
+.left-rail {
+  grid-template-rows: 270px minmax(250px, 1fr) 54px;
+  gap: 9px;
+}
+
+.center-stage {
+  gap: 9px;
+}
+
+.status-panel,
+.detection-panel {
+  background:
+    linear-gradient(150deg, rgba(16, 36, 39, .3), transparent 38%),
+    rgba(1, 8, 10, .84);
+}
+
+.radar-mini {
+  height: 88px;
+  margin-top: 7px;
+  margin-bottom: 1px;
+  border-color: rgba(65, 208, 223, .45);
+  background:
+    repeating-radial-gradient(circle, transparent 0 17px, rgba(51, 203, 217, .24) 18px 19px),
+    linear-gradient(rgba(57, 202, 216, .19) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(57, 202, 216, .18) 1px, transparent 1px);
+  background-size: auto, 100% 25%, 25% 100%;
+  box-shadow: 0 0 35px rgba(27, 185, 203, .07);
+}
+
+.radar-dot {
+  animation: radar-contact 2.9s ease-in-out infinite;
+}
+
+.status-panel .metric {
+  margin-top: 8px;
+}
+
+.radar-dot.dot-b {
+  animation-delay: -1.65s;
+}
+
+.metric > i {
+  height: 2px;
+  background: rgba(23, 48, 52, .82);
+}
+
+.metric > i::after {
+  background: linear-gradient(90deg, #1baec0, #48e6d0);
+  animation: metric-current 3.6s ease-in-out infinite alternate;
+}
+
+.main-nav {
+  background: rgba(1, 7, 9, .86);
+}
+
+.main-nav button {
+  color: #91a6aa;
+  border-bottom-color: rgba(73, 127, 136, .14);
+}
+
+.main-nav button:hover {
+  color: #d9eaeb;
+  background: linear-gradient(90deg, rgba(55, 180, 195, .09), transparent);
+  padding-left: 20px;
+}
+
+.main-nav button.active {
+  color: #e1f4f5;
+  background: linear-gradient(90deg, rgba(26, 154, 173, .19), rgba(2, 17, 21, .16));
+  box-shadow: inset 2px 0 #47dcea, inset 0 0 35px rgba(38, 194, 210, .045);
+}
+
+.mode-bar {
+  background: rgba(1, 7, 9, .87);
+}
+
+.mode-button {
+  border-right-color: rgba(64, 111, 119, .15);
+}
+
+.mode-button.active {
+  background: linear-gradient(180deg, rgba(27, 114, 128, .13), rgba(3, 14, 17, .06));
+}
+
+.mode-button.active::after {
+  background: #4cdae5;
+  box-shadow: 0 0 10px rgba(76, 218, 229, .5);
+  animation: active-mode-line 2.8s ease-in-out infinite;
+}
+
+.frequency-panel {
+  background:
+    radial-gradient(ellipse at 50% 0, rgba(42, 109, 119, .075), transparent 48%),
+    linear-gradient(180deg, rgba(2, 11, 14, .91), rgba(1, 6, 8, .88));
+  border-color: rgba(97, 182, 195, .28);
+  transition: border-color .7s ease, box-shadow .7s ease, background .7s ease;
+}
+
+body[data-receiver-activity="carrier"] .frequency-panel {
+  border-color: rgba(119, 211, 220, .42);
+  box-shadow: var(--shadow), 0 0 30px rgba(48, 191, 203, .055);
+}
+
+body[data-receiver-activity="locked"] .frequency-panel,
+body[data-receiver-activity="decoding"] .frequency-panel {
+  border-color: rgba(218, 163, 65, .4);
+  box-shadow: var(--shadow), 0 0 36px rgba(199, 137, 42, .07);
+}
+
+body[data-receiver-activity="decoding"] .transmission-panel {
+  border-color: rgba(218, 163, 65, .38);
+}
+
+.frequency-track::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  left: 25px;
+  right: 25px;
+  top: 31px;
+  bottom: 16px;
+  opacity: .22;
+  background:
+    linear-gradient(rgba(60, 135, 146, .12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(60, 135, 146, .09) 1px, transparent 1px);
+  background-size: 100% 18px, 32px 100%;
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+
+.frequency-track canvas {
+  z-index: 2;
+  filter: saturate(1.08) drop-shadow(0 0 5px rgba(47, 205, 215, .08));
+}
+
+.tuner-marker {
+  box-shadow: 0 0 11px 1px rgba(221, 166, 65, .35);
+}
+
+.analysis-grid {
+  gap: 9px;
+}
+
+.live-spectrum-panel,
+.signal-analysis-panel,
+.transmission-panel {
+  background:
+    linear-gradient(145deg, rgba(18, 38, 41, .24), transparent 34%),
+    rgba(1, 8, 10, .87);
+}
+
+.live-spectrum-panel canvas {
+  background:
+    linear-gradient(rgba(41, 101, 111, .055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(41, 101, 111, .04) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(3, 15, 18, .28), rgba(0, 5, 7, .66));
+  background-size: 100% 24px, 34px 100%, auto;
+}
+
+.gauge-arc::before,
+.gauge-arc::after {
+  border-width: 9px;
+}
+
+.transmission-panel {
+  background:
+    radial-gradient(circle at 82% 50%, rgba(134, 89, 33, .11), transparent 37%),
+    linear-gradient(145deg, rgba(15, 29, 30, .18), transparent 34%),
+    rgba(1, 8, 10, .89);
+}
+
+.status-panel > header,
+.detection-panel > header,
+.panel-title-row,
+.panel-heading > span {
+  color: #abc0c2;
+}
+
+.metric span,
+.scale-labels,
+.powers,
+.db-scale,
+.submetric > span,
+.transmission-copy dt,
+.detection-log time {
+  color: #7f969a;
+}
+
+.metric b,
+.transmission-copy dd,
+.detection-log article strong,
+.session-panel strong,
+.footer-stat b {
+  color: #c5d3d3;
+}
+
+.detection-log article small {
+  color: #72939a;
+}
+
+.detection-log article {
+  border-top-color: rgba(68, 112, 120, .14);
+  transition: background .25s ease, padding .25s ease;
+}
+
+.detection-log article:hover {
+  margin-inline: -6px;
+  padding-inline: 6px;
+  background: linear-gradient(90deg, rgba(54, 169, 184, .06), transparent);
+}
+
+.mini-wave i {
+  background: #1598a8;
+  animation: mini-wave-live var(--wave-speed, 1.7s) ease-in-out infinite alternate;
+}
+
+.mini-wave i:nth-child(3n) { --wave-speed: 1.13s; }
+.mini-wave i:nth-child(4n) { --wave-speed: 2.21s; }
+.mini-wave i:nth-child(5n) { --wave-speed: .91s; }
+
+.status-footer {
+  border-top-color: rgba(83, 150, 162, .18);
+  background:
+    linear-gradient(90deg, rgba(15, 33, 35, .1), transparent 20%, transparent 80%, rgba(15, 33, 35, .08)),
+    rgba(1, 5, 7, .88);
+  backdrop-filter: blur(18px);
+}
+
+.noise-widget canvas {
+  background: rgba(2, 11, 13, .7);
+}
+
+.toast {
+  background: rgba(2, 9, 11, .92);
+  backdrop-filter: blur(18px);
+}
+
+.overlay {
+  background: rgba(0, 2, 3, .72);
+  backdrop-filter: blur(10px);
+}
+
+.overlay-card {
+  background:
+    linear-gradient(145deg, rgba(17, 37, 39, .24), transparent 28%),
+    rgba(1, 7, 9, .94);
+}
+
+@keyframes sky-breathe {
+  0% { filter: saturate(.83) contrast(1.05) brightness(.86); opacity: .91; }
+  100% { filter: saturate(.89) contrast(1.08) brightness(.96); opacity: .98; }
+}
+
+@keyframes far-drift {
+  to { transform: translate3d(-61px, 34px, 0); }
+}
+
+@keyframes near-drift {
+  0% { transform: translate3d(-8px, -3px, 0) scale(1); }
+  100% { transform: translate3d(10px, 8px, 0) scale(1.03); }
+}
+
+@keyframes accretion-pulse {
+  0%, 100% { opacity: .28; transform: translateX(-50%) scaleX(.92); }
+  47% { opacity: .55; transform: translateX(-50%) scaleX(1.04); }
+  66% { opacity: .36; transform: translateX(-50%) scaleX(.98); }
+}
+
+@keyframes orbit-trace {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes sky-pulse {
+  0%, 14% { opacity: 0; transform: scale(.2); }
+  24% { opacity: .8; }
+  70%, 100% { opacity: 0; transform: scale(3.8); }
+}
+
+@keyframes glass-glint {
+  0%, 70% { opacity: 0; transform: translateX(-125%); }
+  78% { opacity: .52; }
+  92%, 100% { opacity: 0; transform: translateX(235%); }
+}
+
+@keyframes instrument-float {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -2px, 0); }
+}
+
+@keyframes radar-contact {
+  0%, 100% { opacity: .42; transform: scale(.72); }
+  43% { opacity: 1; transform: scale(1.18); }
+}
+
+@keyframes metric-current {
+  0% { filter: brightness(.84); }
+  37% { filter: brightness(1.1); }
+  64% { filter: brightness(.94); }
+  100% { filter: brightness(1.16); }
+}
+
+@keyframes active-mode-line {
+  0%, 100% { opacity: .55; transform: scaleX(.82); }
+  50% { opacity: 1; transform: scaleX(1.06); }
+}
+
+@keyframes mini-wave-live {
+  0% { transform: scaleY(.48); opacity: .48; }
+  38% { transform: scaleY(1.04); opacity: .9; }
+  67% { transform: scaleY(.69); opacity: .7; }
+  100% { transform: scaleY(1.18); opacity: .98; }
+}
+
+@media (max-width: 1250px) {
+  .app-shell {
+    grid-template-rows: 184px auto 66px;
+  }
+
+  .hero-header {
+    grid-template-columns: 220px 1fr 250px;
+  }
+
+  .title-block {
+    padding-top: 60px;
+  }
+
+  .observatory-sky {
+    height: 520px;
+  }
+}
+
+@media (max-width: 900px) {
+  body::before {
+    background: linear-gradient(180deg, transparent, rgba(1, 3, 4, .35) 22%, #010203 72%);
+  }
+
+  .app-shell {
+    padding: 12px;
+  }
+
+  .hero-header {
+    height: 302px;
+    grid-template-columns: 1fr;
+    grid-template-rows: 108px 82px 94px;
+    gap: 8px;
+  }
+
+  .title-block {
+    grid-column: 1;
+    grid-row: 1;
+    width: 100%;
+    padding-top: 28px;
+  }
+
+  .title-block h1 {
+    font-size: clamp(24px, 6.5vw, 31px);
+    letter-spacing: .14em;
+  }
+
+  .title-block p {
+    margin-top: 14px;
+    font-size: 9px;
+  }
+
+  .station-id {
+    grid-row: 2;
+    width: 100%;
+    min-height: 82px;
+  }
+
+  .system-alert {
+    grid-row: 3;
+    width: 100%;
+    min-height: 94px;
+  }
+
+  .system-alert canvas {
+    width: min(250px, 100%);
+  }
+
+  .left-rail {
+    grid-template-rows: auto;
+  }
+
+  .observatory-sky {
+    inset: 0 -36% auto;
+    height: 450px;
+    min-height: 450px;
+    background-position: center top;
+    opacity: .72;
+  }
+
+  .orbital-telemetry {
+    width: 420px;
+    height: 420px;
+    top: -112px;
+  }
+
+  .glass-soft,
+  .panel {
+    background:
+      linear-gradient(145deg, rgba(14, 31, 34, .22), transparent 36%),
+      rgba(1, 7, 9, .87);
+    backdrop-filter: blur(14px);
+  }
+
+  .station-id,
+  .system-alert {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .observatory-sky,
+  .sky-depth,
+  .accretion-bloom,
+  .orbit-trace,
+  .sky-pulse,
+  .panel::before,
+  .glass-soft::before,
+  .station-id,
+  .system-alert,
+  .radar-dot,
+  .metric > i::after,
+  .mode-button.active::after,
+  .mini-wave i {
+    animation: none !important;
+  }
+}
+
+.motion-reduced .observatory-sky,
+.motion-reduced .sky-depth,
+.motion-reduced .accretion-bloom,
+.motion-reduced .orbit-trace,
+.motion-reduced .sky-pulse,
+.motion-reduced .panel::before,
+.motion-reduced .glass-soft::before,
+.motion-reduced .station-id,
+.motion-reduced .system-alert,
+.motion-reduced .radar-dot,
+.motion-reduced .metric > i::after,
+.motion-reduced .mode-button.active::after,
+.motion-reduced .mini-wave i {
+  animation: none !important;
+}
