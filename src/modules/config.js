@@ -2,7 +2,7 @@ export const CONFIG = Object.freeze({
   minFrequencyMHz: 10,
   maxFrequencyMHz: 100_000,
   initialFrequencyMHz: 4_217.812651,
-  scanSpeed: 0.052,
+  scanSpeed: 0.038,
   lockToleranceRatio: 0.014,
   decodeTickMs: 520,
   maxLogs: 8,

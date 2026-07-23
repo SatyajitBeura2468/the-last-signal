@@ -1,7 +1,15 @@
 import { CONFIG } from './modules/config.js';
 import { getSessionId, loadState, saveState } from './modules/store.js';
 import { fetchSignalCatalog, requestDecode, syncSession } from './modules/api-client.js';
-import { findNearestSignal, formatFrequency, frequencyFromRatio, logFrequency, deriveTelemetry } from './modules/signal-engine.js';
+import {
+  createRadioState,
+  findNearestSignal,
+  formatFrequency,
+  frequencyFromRatio,
+  getSignalFrequency,
+  logFrequency,
+  sampleTelemetry,
+} from './modules/signal-engine.js';
 import { AudioEngine } from './modules/audio-engine.js';
 import { createStarfield } from './modules/starfield.js';
 import { SpectrumRenderer } from './modules/spectrum-renderer.js';
@@ -35,6 +43,9 @@ const state = {
   pointerTuning: false,
   lastFrame: performance.now(),
   buffer: 87,
+  radio: createRadioState(),
+  lastScanToast: 0,
+  lockLostNotified: false,
 };
 
 const audio = new AudioEngine();
@@ -59,17 +70,18 @@ function toast(message, tone = 'info') {
   setTimeout(() => {
     node.classList.remove('show');
     setTimeout(() => node.remove(), 300);
-  }, 2700);
+  }, 3000);
 }
 
 function setMode(mode) {
   state.mode = mode;
   state.scanning = mode === 'scan';
-  $$('.mode-button').forEach((button) => button.classList.remove('active'));
-  const button = $(`#${mode}-button`);
-  if (button) button.classList.add('active');
+  $$('.mode-button').forEach((button) => button.classList.toggle('active', button.id === `${mode}-button`));
   $('#mode-value').textContent = mode === 'scan' ? 'NARROWBAND' : mode.toUpperCase();
   $('#hopping-mode').textContent = state.scanning ? 'AUTO' : 'MANUAL';
+  ['scan', 'tune', 'lock', 'decode'].forEach((name) => {
+    $(`#${name}-button`).setAttribute('aria-pressed', String(mode === name));
+  });
 }
 
 function updateFrequency(next) {
@@ -82,9 +94,9 @@ function updateFrequency(next) {
 }
 
 function createMiniWave() {
-  const spans = Array.from({ length: 22 }, (_, i) => {
-    const h = 3 + Math.abs(Math.sin(i * 1.83 + Math.random())) * 9;
-    return `<i style="height:${h.toFixed(1)}px"></i>`;
+  const spans = Array.from({ length: 22 }, (_, index) => {
+    const height = 3 + Math.abs(Math.sin(index * 1.83 + Math.random())) * 9;
+    return `<i style="height:${height.toFixed(1)}px"></i>`;
   }).join('');
   return `<span class="mini-wave">${spans}</span>`;
 }
@@ -98,12 +110,12 @@ function renderLogs() {
 }
 
 function addLog(signal, status = 'LOCKED') {
-  const now = new Date();
+  const frequencyMHz = Number.isFinite(signal?.frequencyMHz) ? signal.frequencyMHz : state.frequencyMHz;
   state.logs.unshift({
-    time: now.toLocaleTimeString('en-GB', { hour12: false }),
-    frequency: `${(signal.frequencyMHz / 1000).toFixed(3)} GHz`,
+    time: new Date().toLocaleTimeString('en-GB', { hour12: false }),
+    frequency: `${(frequencyMHz / 1000).toFixed(3)} GHz`,
     status,
-    id: signal.id,
+    id: signal?.id,
   });
   state.logs = state.logs.slice(0, CONFIG.maxLogs);
   renderLogs();
@@ -113,11 +125,11 @@ function addLog(signal, status = 'LOCKED') {
 function renderTransmission(signal = null) {
   if (!signal) {
     $('#transmission-title').textContent = 'TRANSMISSION SEARCH';
-    $('#signal-badge').textContent = 'IDLE';
+    $('#signal-badge').textContent = 'LISTENING';
     $('#signal-id').textContent = 'TLS-UNRESOLVED';
-    $('#received-time').textContent = '—';
-    $('#signal-coordinates').textContent = 'RA —   DEC —';
-    $('#signal-distance').textContent = '— light years';
+    $('#received-time').textContent = '--';
+    $('#signal-coordinates').textContent = 'RA --   DEC --';
+    $('#signal-distance').textContent = '-- light years';
     return;
   }
   $('#transmission-title').textContent = 'TRANSMISSION DETECTED';
@@ -137,28 +149,35 @@ function renderDecode() {
 function lockSignal() {
   const { signal, distance } = findNearestSignal(state.frequencyMHz, state.signals);
   const tolerance = CONFIG.lockToleranceRatio * state.settings.sensitivity;
-  if (!signal || distance > tolerance) {
+  const candidate = state.telemetry.signal?.id === signal?.id ? signal : null;
+  if (!candidate || distance > tolerance || !state.telemetry.lockable) {
     state.lockedSignal = null;
     $('#lock-caption').textContent = 'SIGNAL LOST';
     $('#lock-caption').className = 'lost';
-    toast('No coherent carrier inside lock window.', 'warning');
+    toast('No coherent carrier inside lock window. Tune until the carrier settles.', 'warning');
     addLog({ frequencyMHz: state.frequencyMHz }, 'NOISE');
     return;
   }
-  state.lockedSignal = signal;
+  state.lockedSignal = candidate;
+  state.lockLostNotified = false;
   state.scanning = false;
-  state.frequencyMHz = signal.frequencyMHz;
-  updateFrequency(signal.frequencyMHz);
+  updateFrequency(getSignalFrequency(candidate, performance.now()));
   setMode('lock');
   $('#lock-caption').textContent = 'LOCKED SIGNAL';
   $('#lock-caption').className = 'locked';
-  renderTransmission(signal);
-  state.decodeProgress = state.unlockedSignalIds.has(signal.id) ? 100 : 0;
-  state.decodedFragments = state.decodeProgress === 100 ? signal.fragments : [];
+  renderTransmission(candidate);
+  state.decodeProgress = state.unlockedSignalIds.has(candidate.id) ? 100 : 0;
+  state.decodedFragments = state.decodeProgress === 100 ? candidate.fragments : [];
   renderDecode();
-  addLog(signal, 'LOCKED');
+  addLog(candidate, 'LOCKED');
   audio.pulse('lock');
-  toast(`Carrier lock established: ${signal.id}`, 'success');
+  toast(`Carrier lock established: ${candidate.id}`, 'success');
+}
+
+function stopDecode(message = 'Decode paused. Carrier remains locked.') {
+  if (!state.decoding) return;
+  state.decoding = false;
+  toast(message, 'info');
 }
 
 async function decodeSignal() {
@@ -166,7 +185,11 @@ async function decodeSignal() {
     toast('Lock a coherent transmission before decoding.', 'warning');
     return;
   }
-  if (state.decoding) return;
+  if (state.decoding) {
+    stopDecode();
+    setMode('lock');
+    return;
+  }
   if (state.decodeProgress >= 100) {
     toast('Transmission already fully decoded.', 'info');
     return;
@@ -175,8 +198,9 @@ async function decodeSignal() {
   setMode('decode');
   audio.pulse('decode');
   const run = async () => {
-    if (!state.decoding) return;
-    state.decodeProgress = Math.min(100, state.decodeProgress + 8 + Math.random() * 5);
+    if (!state.decoding || !state.lockedSignal) return;
+    const qualityFactor = clamp(state.telemetry.quality / 100, 0.35, 1);
+    state.decodeProgress = Math.min(100, state.decodeProgress + (5 + Math.random() * 5) * qualityFactor);
     const payload = await requestDecode(state.lockedSignal, state.decodeProgress, state.sessionId);
     if (payload.fragment && !state.decodedFragments.includes(payload.fragment)) state.decodedFragments.push(payload.fragment);
     renderDecode();
@@ -186,11 +210,7 @@ async function decodeSignal() {
       state.unlockedSignalIds.add(state.lockedSignal.id);
       renderDecode();
       saveState(state);
-      syncSession({
-        sessionId: state.sessionId,
-        unlockedSignalIds: [...state.unlockedSignalIds],
-        logs: state.logs.slice(0, 8),
-      });
+      syncSession({ sessionId: state.sessionId, unlockedSignalIds: [...state.unlockedSignalIds], logs: state.logs.slice(0, 8) });
       toast('Decode complete. Archive fragment restored.', 'success');
       return;
     }
@@ -200,30 +220,58 @@ async function decodeSignal() {
 }
 
 function updateTelemetry(time) {
-  state.telemetry = deriveTelemetry(state.frequencyMHz, state.signals, time);
-  if (state.lockedSignal) {
-    state.telemetry = {
-      ...state.telemetry,
-      strength: state.lockedSignal.strength + Math.sin(time * .002) * .8,
-      quality: state.lockedSignal.quality,
-      stability: state.lockedSignal.stability,
-      proximity: 1,
-      signal: state.lockedSignal,
-    };
-  }
+  state.telemetry = sampleTelemetry(state.frequencyMHz, state.signals, time, state.radio, {
+    bandwidth: CONFIG.lockToleranceRatio * state.settings.sensitivity,
+  });
   const { strength, quality, stability, proximity } = state.telemetry;
+  const detectedSignal = state.telemetry.signal;
+
+  if (state.scanning && state.telemetry.lockable && detectedSignal) {
+    if (state.radio.scanCandidateId !== detectedSignal.id) {
+      state.radio.scanCandidateId = detectedSignal.id;
+      state.radio.scanCandidateSince = time;
+    } else if (!state.lastScanToast && time - state.radio.scanCandidateSince > 340) {
+      state.lastScanToast = time;
+      state.scanning = false;
+      setMode('tune');
+      updateFrequency(state.telemetry.centerFrequency);
+      renderTransmission(detectedSignal);
+      $('#lock-caption').textContent = 'CANDIDATE FOUND';
+      toast(`Promising carrier found: ${detectedSignal.id}. Press LOCK to hold it.`, 'success');
+      addLog(detectedSignal, 'WEAK');
+    }
+  } else if (!state.telemetry.lockable) {
+    state.radio.scanCandidateId = null;
+    state.radio.scanCandidateSince = 0;
+  }
+
+  if (state.lockedSignal && state.telemetry.signal?.id === state.lockedSignal.id && (proximity < 0.38 || quality < 22)) {
+    state.lockedSignal = null;
+    state.decoding = false;
+    setMode('tune');
+    $('#lock-caption').textContent = 'SIGNAL LOST';
+    $('#lock-caption').className = 'lost';
+    if (!state.lockLostNotified) {
+      state.lockLostNotified = true;
+      toast('Carrier drifted outside the lock window. Retune and lock again.', 'warning');
+    }
+  }
+
   $('#strength-value').textContent = strength.toFixed(1).replace('-', '−');
   $('#quality-value').textContent = `${quality}%`;
   $('#stability-value').textContent = `${stability}%`;
   $('#quality-bar').style.width = `${quality}%`;
   $('.signal-gauge').style.setProperty('--strength', `${clamp((strength + 120) / 120 * 180, 2, 178)}deg`);
-  $('#noise-value').textContent = `${(-112 + proximity * 18).toFixed(0).replace('-', '−')} dBm`;
-  state.buffer = clamp(86 + Math.sin(time * .0007) * 3 + proximity * 5, 0, 100);
+  $('#noise-value').textContent = `${state.telemetry.noiseFloor.toFixed(0).replace('-', '−')} dBm`;
+  state.buffer = clamp(61 + proximity * 28 + quality * 0.12 + (Math.random() - 0.5) * 7, 0, 100);
   $('#buffer-value').textContent = `${Math.round(state.buffer)}%`;
   $('#buffer-bar').style.width = `${state.buffer}%`;
-  $('#dish-value').textContent = `${(87.4 + Math.sin(time * .0005) * .6).toFixed(1)}%`;
-  $('#temp-value').textContent = `−${(195.2 + Math.sin(time * .00031) * .4).toFixed(1)} °C`;
-  audio.update(state.telemetry);
+  $('#dish-value').textContent = `${clamp(84 + quality * 0.09 + (Math.random() - 0.5) * 1.8, 0, 100).toFixed(1)}%`;
+  $('#boost-value').textContent = `+${(16 + proximity * 19 + Math.random() * 2.5).toFixed(1)} dB`;
+  $('#power-value').textContent = `${clamp(92 + quality * 0.06 + (Math.random() - 0.5) * 1.2, 0, 100).toFixed(1)}%`;
+  $('#temp-value').textContent = `−${(195.2 + state.telemetry.interference * 2.4 + (Math.random() - 0.5) * 0.35).toFixed(1)} °C`;
+  $('#bandwidth-value').textContent = `${state.telemetry.bandwidth.toFixed(1)} Hz`;
+  audio.update({ ...state.telemetry, frequencyMHz: state.frequencyMHz });
 }
 
 function animate(time) {
@@ -242,11 +290,26 @@ function tuneFromPointer(event) {
   const rect = $('#frequency-track').getBoundingClientRect();
   const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
   state.lockedSignal = null;
-  state.decoding = false;
+  stopDecode('Decode cancelled while tuning.');
+  state.lockLostNotified = false;
   setMode('tune');
   updateFrequency(frequencyFromRatio(ratio));
   $('#lock-caption').textContent = 'MANUAL TUNE';
   $('#lock-caption').className = '';
+  renderTransmission();
+}
+
+function tuneToSignal(signal) {
+  state.lockedSignal = null;
+  state.decoding = false;
+  state.lockLostNotified = false;
+  setMode('tune');
+  updateFrequency(getSignalFrequency(signal, performance.now()));
+  $('#lock-caption').textContent = 'TUNE TO LOCK';
+  $('#lock-caption').className = '';
+  renderTransmission(signal);
+  closeOverlay();
+  toast(`Tuned to ${signal.id}. Hold LOCK when the carrier settles.`, 'info');
 }
 
 function bindControls() {
@@ -266,66 +329,93 @@ function bindControls() {
   track.addEventListener('wheel', (event) => {
     event.preventDefault();
     setMode('tune');
-    const ratio = clamp(logFrequency(state.frequencyMHz) + Math.sign(event.deltaY) * .0032, 0, 1);
-    updateFrequency(frequencyFromRatio(ratio));
+    updateFrequency(frequencyFromRatio(logFrequency(state.frequencyMHz) + Math.sign(event.deltaY) * 0.0032));
   }, { passive: false });
   track.addEventListener('keydown', (event) => {
     if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
     event.preventDefault();
     setMode('tune');
     const direction = event.key === 'ArrowLeft' ? -1 : 1;
-    updateFrequency(frequencyFromRatio(logFrequency(state.frequencyMHz) + direction * (event.shiftKey ? .0006 : .0025)));
+    updateFrequency(frequencyFromRatio(logFrequency(state.frequencyMHz) + direction * (event.shiftKey ? 0.0006 : 0.0025)));
   });
 
-  $('#step-left').addEventListener('click', () => updateFrequency(frequencyFromRatio(logFrequency(state.frequencyMHz) - .004)));
-  $('#step-right').addEventListener('click', () => updateFrequency(frequencyFromRatio(logFrequency(state.frequencyMHz) + .004)));
-  $('#scan-button').addEventListener('click', async () => { await audio.start(); state.lockedSignal = null; state.decoding = false; setMode('scan'); renderTransmission(); });
-  $('#tune-button').addEventListener('click', async () => { await audio.start(); setMode('tune'); });
+  $('#step-left').addEventListener('click', () => { setMode('tune'); updateFrequency(frequencyFromRatio(logFrequency(state.frequencyMHz) - 0.004)); });
+  $('#step-right').addEventListener('click', () => { setMode('tune'); updateFrequency(frequencyFromRatio(logFrequency(state.frequencyMHz) + 0.004)); });
+  $('#scan-button').addEventListener('click', async () => {
+    await audio.start();
+    state.lockedSignal = null;
+    state.decoding = false;
+    state.lastScanToast = 0;
+    state.radio.scanCandidateId = null;
+    renderTransmission();
+    $('#lock-caption').textContent = 'SEARCHING';
+    $('#lock-caption').className = '';
+    setMode('scan');
+    toast('Automatic sweep resumed. The receiver will pause on a promising carrier.', 'info');
+  });
+  $('#tune-button').addEventListener('click', async () => { await audio.start(); state.scanning = false; setMode('tune'); toast('Manual tuning engaged. Use the band, wheel, arrows, or keys.', 'info'); });
   $('#lock-button').addEventListener('click', async () => { await audio.start(); lockSignal(); });
   $('#decode-button').addEventListener('click', async () => { await audio.start(); decodeSignal(); });
 
   $$('.main-nav button').forEach((button) => button.addEventListener('click', () => openView(button.dataset.view, button)));
   $('#overlay-close').addEventListener('click', closeOverlay);
-  $('#overlay').addEventListener('click', (event) => { if (event.target === $('#overlay')) closeOverlay(); });
+  $('#overlay').addEventListener('click', (event) => {
+    if (event.target === $('#overlay')) closeOverlay();
+    const signalButton = event.target.closest('[data-signal-id]');
+    if (signalButton) {
+      const signal = state.signals.find((candidate) => candidate.id === signalButton.dataset.signalId);
+      if (signal) tuneToSignal(signal);
+    }
+  });
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeOverlay(); });
   $('#view-all-logs').addEventListener('click', () => openView('logbook', $('.main-nav [data-view="logbook"]')));
 }
 
 function overlayTableRows() {
-  return state.logs.map((log) => `<tr><td>${log.time}</td><td>${log.frequency}</td><td><span class="table-status ${log.status.toLowerCase()}">${log.status}</span></td><td>${log.id ?? 'UNCLASSIFIED'}</td></tr>`).join('');
+  return state.logs.map((log) => {
+    const signal = state.signals.find((candidate) => candidate.id === log.id);
+    const action = signal ? ` data-signal-id="${signal.id}"` : '';
+    return `<tr${action}><td>${log.time}</td><td>${log.frequency}</td><td><span class="table-status ${log.status.toLowerCase()}">${log.status}</span></td><td>${log.id ?? 'UNCLASSIFIED'}</td></tr>`;
+  }).join('');
+}
+
+function dashboardMarkup() {
+  const decoded = state.unlockedSignalIds.size;
+  const last = state.logs[0];
+  return `<div class="dashboard-summary"><div class="dashboard-hero"><span>RECEIVER STATE</span><strong>${state.mode.toUpperCase()} / ${state.telemetry.quality}% QUALITY</strong><p>${state.telemetry.lockable ? 'A coherent carrier is inside the listening window.' : 'No stable carrier at the current frequency. Keep tuning.'}</p></div><div class="dashboard-stats"><article><span>LOCKS THIS SESSION</span><strong>${state.logs.filter((log) => log.status === 'LOCKED').length}</strong></article><article><span>ARCHIVE FRAGMENTS</span><strong>${decoded}</strong></article><article><span>LAST FREQUENCY</span><strong>${last?.frequency ?? '--'}</strong></article></div></div>`;
 }
 
 function openView(view, button) {
-  if (view === 'scan' || view === 'dashboard') {
-    $$('.main-nav button').forEach((item) => item.classList.toggle('active', item === button));
+  $$('.main-nav button').forEach((item) => item.classList.toggle('active', item === button));
+  if (view === 'scan') {
+    closeOverlay();
+    setMode('scan');
     return;
   }
-  $$('.main-nav button').forEach((item) => item.classList.toggle('active', item === button));
   const overlay = $('#overlay');
   const title = $('#overlay-title');
-  const kicker = $('#overlay-kicker');
   const content = $('#overlay-content');
-  kicker.textContent = 'DEEP SPACE ARRAY 7';
+  $('#overlay-kicker').textContent = 'DEEP SPACE ARRAY 7';
   title.textContent = view.toUpperCase();
-  if (view === 'transmissions') {
-    content.innerHTML = `<div class="archive-grid">${state.signals.map((signal) => `<article class="archive-card ${state.unlockedSignalIds.has(signal.id) ? 'unlocked' : ''}"><span>${signal.className}</span><h3>${signal.id}</h3><p>${(signal.frequencyMHz / 1000).toFixed(6)} GHz</p><dl><div><dt>Distance</dt><dd>${signal.distance.toLocaleString()} ly</dd></div><div><dt>Status</dt><dd>${state.unlockedSignalIds.has(signal.id) ? 'DECODED' : 'UNRESOLVED'}</dd></div></dl></article>`).join('')}</div>`;
+  if (view === 'dashboard') {
+    content.innerHTML = dashboardMarkup();
+  } else if (view === 'transmissions') {
+    content.innerHTML = `<div class="archive-grid">${state.signals.map((signal) => `<button class="archive-card ${state.unlockedSignalIds.has(signal.id) ? 'unlocked' : ''}" data-signal-id="${signal.id}"><span>${signal.className}</span><h3>${signal.id}</h3><p>${(signal.frequencyMHz / 1000).toFixed(6)} GHz</p><dl><div><dt>Distance</dt><dd>${signal.distance.toLocaleString()} ly</dd></div><div><dt>Status</dt><dd>${state.unlockedSignalIds.has(signal.id) ? 'DECODED' : 'UNRESOLVED'}</dd></div></dl><small>CLICK TO TUNE</small></button>`).join('')}</div>`;
   } else if (view === 'starmap') {
-    content.innerHTML = `<div class="full-starmap"><div class="map-orbit o1"></div><div class="map-orbit o2"></div><div class="map-orbit o3"></div>${state.signals.map((s, i) => `<button style="--x:${23 + i * 24}%;--y:${60 - i * 17}%" title="${s.id}"><i></i><span>${s.id}<small>${s.ra} / ${s.dec}</small></span></button>`).join('')}</div>`;
+    content.innerHTML = `<div class="full-starmap"><div class="map-orbit o1"></div><div class="map-orbit o2"></div><div class="map-orbit o3"></div>${state.signals.map((signal, index) => `<button data-signal-id="${signal.id}" style="--x:${23 + index * 24}%;--y:${60 - index * 17}%" title="Tune to ${signal.id}"><i></i><span>${signal.id}<small>${signal.ra} / ${signal.dec}</small></span></button>`).join('')}</div>`;
   } else if (view === 'logbook') {
     content.innerHTML = `<div class="table-wrap"><table><thead><tr><th>TIME</th><th>FREQUENCY</th><th>STATUS</th><th>IDENTIFIER</th></tr></thead><tbody>${overlayTableRows()}</tbody></table></div>`;
   } else if (view === 'settings') {
     content.innerHTML = `<form class="settings-form"><label><span>PROCEDURAL AUDIO<small>Static, carrier tones and lock cues</small></span><input id="setting-audio" type="checkbox" ${state.settings.audio ? 'checked' : ''}></label><label><span>REDUCED MOTION<small>Disable automatic frequency sweep</small></span><input id="setting-motion" type="checkbox" ${state.settings.reducedMotion ? 'checked' : ''}></label><label class="range-label"><span>LOCK SENSITIVITY<small>Receiver tolerance around coherent carriers</small></span><input id="setting-sensitivity" type="range" min="0.6" max="1.8" step="0.1" value="${state.settings.sensitivity}"></label><button type="submit" class="outline-button">APPLY RECEIVER CONFIGURATION</button></form>`;
-    setTimeout(() => {
-      $('.settings-form').addEventListener('submit', (event) => {
-        event.preventDefault();
-        state.settings.audio = $('#setting-audio').checked;
-        state.settings.reducedMotion = $('#setting-motion').checked;
-        state.settings.sensitivity = Number($('#setting-sensitivity').value);
-        audio.setEnabled(state.settings.audio);
-        saveState(state);
-        toast('Receiver configuration applied.', 'success');
-        closeOverlay();
-      });
+    $('.settings-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      state.settings.audio = $('#setting-audio').checked;
+      state.settings.reducedMotion = $('#setting-motion').checked;
+      state.settings.sensitivity = Number($('#setting-sensitivity').value);
+      audio.setEnabled(state.settings.audio);
+      saveState(state);
+      toast('Receiver configuration applied.', 'success');
+      closeOverlay();
     });
   }
   overlay.hidden = false;
@@ -364,6 +454,7 @@ async function boot() {
   renderTransmission();
   renderDecode();
   bindControls();
+  setMode('scan');
   setTimeout(() => {
     $('#boot-screen').classList.add('complete');
     $('#app').classList.add('ready');
