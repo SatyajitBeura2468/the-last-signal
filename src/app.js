@@ -557,6 +557,7 @@ function openView(view, button) {
   $('#overlay-kicker').textContent = view === 'dashboard' ? 'ARRAY COMMAND DECK' : view === 'transmissions' ? 'DEEP FIELD ARCHIVE' : view === 'starmap' ? 'CELESTIAL NAVIGATION' : view === 'logbook' ? 'SESSION MEMORY' : 'RECEIVER CONTROL';
   $('#overlay-title').textContent = view.toUpperCase();
   renderActiveView();
+  $('#overlay-content').scrollTop = 0;
   overlay.hidden = false;
   requestAnimationFrame(() => overlay.classList.add('visible'));
 }
