@@ -1,10 +1,12 @@
 import './observatory-guard.js';
+import { UNIFIED_SIGNAL_CATALOG } from '../simulation/signal-model.js';
 
 export const OBSERVATORY_WORLDS = [
-  { id: 'array', label: 'ARRAY CORE', short: 'CORE', index: '07A' },
+  { id: 'live-ops', label: 'LIVE OPS', short: 'OPS', index: '07A' },
   { id: 'lab', label: 'SIGNAL FORENSICS', short: 'LAB', index: '07B' },
-  { id: 'nav', label: 'CELESTIAL NAVIGATION', short: 'NAV', index: '07C' },
-  { id: 'vault', label: 'EVIDENCE VAULT', short: 'VAULT', index: '07D' },
+  { id: 'sky', label: 'SKY CONTROL', short: 'SKY', index: '07C' },
+  { id: 'evidence', label: 'EVIDENCE', short: 'EVD', index: '07D' },
+  { id: 'systems', label: 'SYSTEMS', short: 'SYS', index: '07E' },
 ];
 
 export const ARRAY_NODES = [
@@ -16,7 +18,7 @@ export const ARRAY_NODES = [
   { id: 'DISH-06', name: 'Western Aperture', bearing: 318, elevation: 58, health: 95.4, role: 'PHASE' },
 ];
 
-export const SIGNAL_CANDIDATES = [
+const LEGACY_SIGNAL_CANDIDATES = [
   {
     id: 'CND-04A-771', frequencyMHz: 1420.405752, className: 'H-LINE', confidence: 42,
     coherence: 61, drift: -0.32, bandwidth: 0.82, ra: '04h 29m 18.4s', dec: '+18° 14′ 03″',
@@ -66,6 +68,23 @@ export const SIGNAL_CANDIDATES = [
     note: 'Carrier repeats every 113 seconds. No known catalogue source matches its cadence.',
   },
 ];
+
+export const SIGNAL_CANDIDATES = UNIFIED_SIGNAL_CATALOG.map((signal, index) => ({
+  id: signal.id,
+  frequencyMHz: signal.frequencyMHz,
+  className: signal.className,
+  confidence: signal.falsePositive ? Math.max(22, signal.quality - 9) : signal.quality,
+  coherence: signal.stability,
+  drift: Number((Math.sin(index * 1.71) * 0.84).toFixed(2)),
+  bandwidth: Number((0.48 + index * 0.31).toFixed(2)),
+  ra: signal.ra,
+  dec: signal.dec,
+  distance: signal.distance,
+  sector: signal.name,
+  note: signal.note,
+  sourceType: signal.sourceType,
+  falsePositive: signal.falsePositive,
+}));
 
 export const SKY_SECTORS = [
   { id: 'aquila', name: 'Aquila Rift', x: 54, y: 46, visibility: 91, window: '00:42–03:18 UTC', range: 14218, risk: 'DUST' },

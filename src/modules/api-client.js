@@ -30,11 +30,21 @@ export async function requestDecode(signal, progress, sessionId) {
   try {
     return await request('/api/decode', {
       method: 'POST',
-      body: JSON.stringify({ signalId: signal.id, progress, sessionId }),
+      body: JSON.stringify({
+        signalId: signal.id,
+        sessionId,
+        token: progress.token,
+        evidence: progress.evidence,
+      }),
     });
   } catch {
-    const index = Math.min(signal.fragments.length - 1, Math.floor((progress / 100) * signal.fragments.length));
-    return { progress, fragment: signal.fragments[index], completed: progress >= 100, source: 'local-fallback' };
+    return {
+      progress: 0,
+      fragment: null,
+      completed: false,
+      source: 'offline',
+      error: 'Signed decode validation is unavailable. No hidden fragment was delivered.',
+    };
   }
 }
 
@@ -43,5 +53,20 @@ export async function syncSession(summary) {
     return await request('/api/session', { method: 'POST', body: JSON.stringify(summary) }, 3000);
   } catch {
     return { accepted: false, offline: true };
+  }
+}
+
+export async function startSession(sessionId) {
+  try {
+    return await request('/api/session', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'start', sessionId }),
+    }, 3000);
+  } catch {
+    return {
+      accepted: false,
+      offline: true,
+      persistenceMode: 'LOCAL_BROWSER_ONLY',
+    };
   }
 }

@@ -21,15 +21,8 @@ export const FALLBACK_SIGNALS = [
     dec: '−02° 35′ 47.3″',
     distance: 14218,
     className: 'T7N',
-    fragments: [
-      '... we watched as the cycle completed ...',
-      '... the stars die and are reborn ...',
-      '... the signal is a seed ...',
-      '... not a message ... a promise ...',
-      '... if you are listening, continue ...',
-      '... you are not the first ...',
-      '... we wait beyond the last ...',
-    ],
+    sourceType: 'REPEATING_UNRESOLVED_CARRIER',
+    falsePositive: false,
   },
   {
     id: 'TLS-1582049930',
@@ -41,7 +34,8 @@ export const FALLBACK_SIGNALS = [
     dec: '+19° 07′ 02.8″',
     distance: 906,
     className: 'HYD',
-    fragments: ['... carrier repeats every 113 seconds ...', '... origin obscured by local hydrogen ...'],
+    sourceType: 'PULSAR_LIKE',
+    falsePositive: false,
   },
   {
     id: 'TLS-7123284400',
@@ -53,6 +47,7 @@ export const FALLBACK_SIGNALS = [
     dec: '−41° 52′ 16.1″',
     distance: 3191,
     className: 'NRW',
-    fragments: ['... narrow pulse train detected ...', '... sequence may encode prime intervals ...'],
+    sourceType: 'REPEATING_UNRESOLVED_CARRIER',
+    falsePositive: false,
   },
 ];

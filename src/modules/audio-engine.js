@@ -6,11 +6,19 @@ export class AudioEngine {
     this.tone = null;
     this.toneGain = null;
     this.enabled = true;
+    this.performanceMuted = false;
     this.started = false;
+    this.indicator = document.querySelector('#audio-state');
+    document.addEventListener('visibilitychange', () => {
+      if (!this.context) return;
+      if (document.hidden) this.context.suspend().catch(() => {});
+      else if (this.enabled && !this.performanceMuted) this.context.resume().catch(() => {});
+    });
+    this.renderIndicator();
   }
 
   async start() {
-    if (this.started || !this.enabled) return;
+    if (this.started || !this.enabled || this.performanceMuted) return;
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return;
     this.context = new AudioContext();
@@ -47,19 +55,22 @@ export class AudioEngine {
     this.tone.connect(this.toneGain).connect(this.master);
     this.tone.start();
     this.started = true;
+    this.renderIndicator();
   }
 
-  update({ proximity, frequencyMHz }) {
+  update({ proximity, frequencyMHz, noiseFloor = -106, interference = 0, stability = 0, lockState = 'SEARCHING', decoding = false }) {
     if (!this.context || !this.started) return;
     const safeProximity = Number.isFinite(proximity) ? Math.max(0, Math.min(1, proximity)) : 0;
     const safeFrequency = Number.isFinite(frequencyMHz) && frequencyMHz > 0 ? frequencyMHz : 1_000;
     const now = Number.isFinite(this.context.currentTime) ? this.context.currentTime : 0;
-    const noiseLevel = Math.max(0.035, 0.19 - safeProximity * 0.13);
-    const carrierFrequency = 180 + ((Math.log10(safeFrequency) % 1 + 1) % 1) * 620;
-    const carrierLevel = safeProximity > 0.42 ? (safeProximity - 0.42) * 0.11 : 0;
-    this.noiseGain.gain.setTargetAtTime(noiseLevel, now, 0.08);
-    this.tone.frequency.setTargetAtTime(carrierFrequency, now, 0.08);
-    this.toneGain.gain.setTargetAtTime(carrierLevel, now, 0.07);
+    const noiseContribution = Math.max(0, Math.min(1, (noiseFloor + 116) / 24));
+    const noiseLevel = Math.max(0.025, Math.min(0.16, 0.06 + noiseContribution * 0.07 + interference * 0.035 - safeProximity * 0.07));
+    const carrierFrequency = 180 + ((Math.log10(safeFrequency) % 1 + 1) % 1) * 620 + (decoding ? 96 : 0);
+    const lockBoost = lockState === 'LOCKED' ? 0.035 : lockState === 'LOCKABLE' ? 0.018 : 0;
+    const carrierLevel = safeProximity > 0.36 ? Math.min(0.09, (safeProximity - 0.36) * 0.08 + lockBoost + stability / 10000) : 0;
+    this.noiseGain.gain.setTargetAtTime(noiseLevel, now, 0.16);
+    this.tone.frequency.setTargetAtTime(carrierFrequency, now, 0.14);
+    this.toneGain.gain.setTargetAtTime(carrierLevel, now, 0.15);
   }
 
   pulse(type = 'lock') {
@@ -80,6 +91,22 @@ export class AudioEngine {
 
   setEnabled(enabled) {
     this.enabled = enabled;
-    if (this.master && this.context) this.master.gain.setTargetAtTime(enabled ? 0.18 : 0, this.context.currentTime, 0.05);
+    if (this.master && this.context) this.master.gain.setTargetAtTime(enabled && !this.performanceMuted ? 0.18 : 0, this.context.currentTime, 0.12);
+    this.renderIndicator();
+  }
+
+  setPerformanceMode(muted) {
+    this.performanceMuted = Boolean(muted);
+    if (this.master && this.context) this.master.gain.setTargetAtTime(this.enabled && !this.performanceMuted ? 0.18 : 0, this.context.currentTime, 0.12);
+    if (this.context && this.performanceMuted) this.context.suspend().catch(() => {});
+    this.renderIndicator();
+  }
+
+  renderIndicator() {
+    if (!this.indicator) return;
+    const active = this.enabled && !this.performanceMuted && this.started;
+    this.indicator.dataset.active = String(active);
+    this.indicator.querySelector('b').textContent = this.performanceMuted ? 'ECO OFF' : active ? 'ACTIVE' : this.enabled ? 'ARMED' : 'MUTED';
+    this.indicator.setAttribute('aria-label', `Audio ${this.indicator.querySelector('b').textContent.toLowerCase()}`);
   }
 }

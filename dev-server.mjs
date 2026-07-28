@@ -20,7 +20,7 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (url.pathname.startsWith('/api/')) {
       const name = url.pathname.split('/').filter(Boolean)[1];
-      if (!['signals', 'decode', 'session'].includes(name)) { res.statusCode = 404; return res.end('Not found'); }
+      if (!['signals', 'decode', 'session', 'space-weather'].includes(name)) { res.statusCode = 404; return res.end('Not found'); }
       const mod = await import(pathToFileURL(join(root, 'api', `${name}.js`)).href);
       let body = {};
       if (req.method !== 'GET') {

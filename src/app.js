@@ -1,6 +1,5 @@
 import { CONFIG } from './modules/config.js';
-import { getSessionId, loadState, saveState } from './modules/store.js';
-import { fetchSignalCatalog, requestDecode, syncSession } from './modules/api-client.js';
+import { fetchSignalCatalog, requestDecode, startSession, syncSession } from './modules/api-client.js';
 import {
   createRadioState,
   findNearestSignal,
@@ -13,52 +12,38 @@ import {
 import { AudioEngine } from './modules/audio-engine.js';
 import { createStarfield } from './modules/starfield.js?v=orbital-observatory-1';
 import { SpectrumRenderer } from './modules/spectrum-renderer.js';
-import { createOperationsState, getOperationsLog, updateOperations } from './modules/operations.js';
+import { getOperationsLog } from './modules/operations.js';
 import { dashboardView, logbookView, settingsView, starmapView, transmissionsView } from './modules/overlay-views.js?v=receiver-workspaces-3';
+import { observatoryStore } from './core/observatory-store.js';
+import { createRenderScheduler } from './core/render-scheduler.js';
+import { selectDecodeEvidence, selectDecodeReady } from './core/selectors.js';
+import { fetchSpaceWeather } from './data/space-weather-client.js';
+import { queueCommand } from './simulation/mission-engine.js';
+import { stepObservatory } from './simulation/observatory-engine.js';
+import { findCatalogTarget } from './simulation/signal-model.js';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
-const saved = loadState();
-const state = {
-  sessionId: getSessionId(),
-  startTime: Date.now(),
-  frequencyMHz: saved?.frequencyMHz ?? CONFIG.initialFrequencyMHz,
-  signals: [],
-  telemetry: { proximity: 0, strength: -112, quality: 4, stability: 8, signal: null, distance: 1 },
-  mode: 'scan',
-  scanning: true,
-  lockedSignal: null,
-  decoding: false,
-  decodeProgress: 0,
-  decodedFragments: [],
-  logs: saved?.logs ?? [
-    { time: '03:12:09', frequency: '1.582 GHz', status: 'WEAK' },
-    { time: '03:03:21', frequency: '7.123 GHz', status: 'NOISE' },
-    { time: '03:01:11', frequency: '3.521 GHz', status: 'WEAK' },
-    { time: '02:28:54', frequency: '9.833 GHz', status: 'NOISE' },
-    { time: '02:15:27', frequency: '2.113 GHz', status: 'WEAK' },
-  ],
-  unlockedSignalIds: new Set(saved?.unlockedSignalIds ?? []),
-  settings: { audio: true, reducedMotion: false, sensitivity: 1, ...(saved?.settings ?? {}) },
-  pointerTuning: false,
-  lastFrame: performance.now(),
-  buffer: 87,
-  radio: createRadioState(),
-  lastScanToast: 0,
-  lockLostNotified: false,
-  operations: createOperationsState(),
-  lastRenderedEventNumber: 0,
-  activeOverlayView: null,
-  selectedSignalId: null,
-  selectedMapSignalId: null,
-  logFilter: 'all',
-  selectedLogIndex: 0,
-  lastOverlayRefresh: 0,
-  overlayCloseTimer: null,
-  nextAtmosphereUpdate: 0,
-};
+const state = observatoryStore.state;
+const localTestMode = ['127.0.0.1', 'localhost'].includes(location.hostname)
+  && new URLSearchParams(location.search).get('e2e') === '1';
+if (localTestMode) {
+  state.scanning = false;
+  state.observatory.clock.speed = 96;
+  state.observatory.mission.requiredIntegrationSeconds = 1.5;
+}
+state.radio = createRadioState(state.seed);
+const sessionRandom = (() => {
+  let value = state.seed || 0x6d2b79f5;
+  return () => {
+    value ^= value << 13;
+    value ^= value >>> 17;
+    value ^= value << 5;
+    return (value >>> 0) / 4294967296;
+  };
+})();
 
 const audio = new AudioEngine();
 const renderer = new SpectrumRenderer({
@@ -68,6 +53,15 @@ const renderer = new SpectrumRenderer({
   targetCanvas: $('#target-canvas'),
   noiseCanvas: $('#noise-canvas'),
   alertCanvas: $('#alert-wave'),
+});
+const scheduler = createRenderScheduler(state.settings);
+state.observatory.render.quality = scheduler.getQuality();
+document.addEventListener('tls:render-quality', (event) => {
+  const quality = event.detail?.quality;
+  if (!quality) return;
+  scheduler.setQuality(quality);
+  state.observatory.render.quality = quality;
+  audio.setPerformanceMode(['BATTERY', 'REDUCED_MOTION'].includes(quality));
 });
 
 createStarfield($('#starfield'));
@@ -106,14 +100,14 @@ function updateFrequency(next) {
   state.frequencyMHz = clamp(next, CONFIG.minFrequencyMHz, CONFIG.maxFrequencyMHz);
   const ratio = logFrequency(state.frequencyMHz);
   $('#tuner-marker').style.left = `${ratio * 100}%`;
-  $('#frequency-track').setAttribute('aria-valuenow', state.frequencyMHz.toFixed(6));
+  $('#tuner-marker').setAttribute('aria-valuenow', state.frequencyMHz.toFixed(6));
   const units = state.frequencyMHz >= 1000 ? 'GHz' : 'MHz';
   $('#frequency-readout').innerHTML = `${formatFrequency(state.frequencyMHz)} <small>${units}</small>`;
 }
 
 function createMiniWave() {
   const spans = Array.from({ length: 22 }, (_, index) => {
-    const height = 3 + Math.abs(Math.sin(index * 1.83 + Math.random())) * 9;
+    const height = 3 + Math.abs(Math.sin(index * 1.83 + sessionRandom())) * 9;
     return `<i style="height:${height.toFixed(1)}px"></i>`;
   }).join('');
   return `<span class="mini-wave">${spans}</span>`;
@@ -137,7 +131,7 @@ function addLog(signal, status = 'LOCKED') {
   });
   state.logs = state.logs.slice(0, CONFIG.maxLogs);
   renderLogs();
-  saveState(state);
+  observatoryStore.persist();
 }
 
 function renderOperations(event = state.operations.currentEvent) {
@@ -156,7 +150,7 @@ function addOperationalLog(event) {
   state.logs.unshift(getOperationsLog(event));
   state.logs = state.logs.slice(0, CONFIG.maxLogs);
   renderLogs();
-  saveState(state);
+  observatoryStore.persist();
   if (state.activeOverlayView === 'logbook' && !$('#overlay').hidden) renderActiveView();
 }
 
@@ -197,6 +191,10 @@ function lockSignal() {
     return;
   }
   state.lockedSignal = candidate;
+  state.observatory.activeTarget = { ...findCatalogTarget(candidate.id) };
+  state.observatory.mission.stage = 'LOCKED';
+  state.observatory.mission.integrationSeconds = 0;
+  queueCommand(state.observatory, 'START_OBSERVATION', { signalId: candidate.id });
   state.lockLostNotified = false;
   state.scanning = false;
   updateFrequency(getSignalFrequency(candidate, performance.now()));
@@ -232,23 +230,50 @@ async function decodeSignal() {
     toast('Transmission already fully decoded.', 'info');
     return;
   }
+  if (!selectDecodeReady(state)) {
+    const missing = Object.entries(selectDecodeEvidence(state))
+      .filter(([, complete]) => !complete)
+      .map(([key]) => key.toUpperCase())
+      .join(', ');
+    toast(`Decode remains sealed. Complete: ${missing}.`, 'warning');
+    document.dispatchEvent(new CustomEvent('tls:open-destination', { detail: { destination: 'lab' } }));
+    return;
+  }
   state.decoding = true;
+  state.observatory.mission.stage = 'DECODING';
   setMode('decode');
   audio.pulse('decode');
   const run = async () => {
     if (!state.decoding || !state.lockedSignal) return;
-    const qualityFactor = clamp(state.telemetry.quality / 100, 0.35, 1);
-    state.decodeProgress = Math.min(100, state.decodeProgress + (5 + Math.random() * 5) * qualityFactor);
-    const payload = await requestDecode(state.lockedSignal, state.decodeProgress, state.sessionId);
+    const payload = await requestDecode(state.lockedSignal, {
+      token: state.sessionToken,
+      evidence: selectDecodeEvidence(state),
+    }, state.sessionId);
+    if (payload.error) {
+      state.decoding = false;
+      state.observatory.mission.stage = 'EVIDENCE_COMMITTED';
+      toast(payload.error, 'warning');
+      return;
+    }
+    if (payload.token) state.sessionToken = payload.token;
+    state.decodeProgress = Number(payload.progress) || state.decodeProgress;
     if (payload.fragment && !state.decodedFragments.includes(payload.fragment)) state.decodedFragments.push(payload.fragment);
     renderDecode();
     if (state.decodeProgress >= 100 || payload.completed) {
       state.decodeProgress = 100;
       state.decoding = false;
       state.unlockedSignalIds.add(state.lockedSignal.id);
+      state.observatory.mission.stage = 'COMPLETE';
       renderDecode();
-      saveState(state);
-      syncSession({ sessionId: state.sessionId, unlockedSignalIds: [...state.unlockedSignalIds], logs: state.logs.slice(0, 8) });
+      observatoryStore.persist();
+      const synced = await syncSession({
+        action: 'sync',
+        sessionId: state.sessionId,
+        token: state.sessionToken,
+        evidence: [...state.unlockedSignalIds],
+        logs: state.logs.slice(0, 8),
+      });
+      if (synced.token) state.sessionToken = synced.token;
       toast('Decode complete. Archive fragment restored.', 'success');
       return;
     }
@@ -293,7 +318,7 @@ function refreshAtmosphere(time) {
   if (time < state.nextAtmosphereUpdate) return;
   const quality = clamp(state.telemetry.quality / 100, 0, 1);
   const stability = clamp(state.telemetry.stability / 100, 0, 1);
-  const energy = clamp(.12 + quality * .48 + stability * .18 + Math.random() * .12, .1, .86);
+  const energy = clamp(.12 + quality * .48 + stability * .18 + sessionRandom() * .12, .1, .86);
   const root = document.documentElement;
   root.style.setProperty('--sky-energy', energy.toFixed(3));
   root.style.setProperty('--signal-bearing', `${(logFrequency(state.frequencyMHz) * 320 - 160).toFixed(2)}deg`);
@@ -306,15 +331,21 @@ function refreshAtmosphere(time) {
         : state.scanning
           ? 'scanning'
           : 'listening';
-  state.nextAtmosphereUpdate = time + 620 + Math.random() * 1280;
+  document.body.dataset.receiverLockState = state.observatory.receiver.lockState;
+  document.body.dataset.receiverSignal = state.telemetry.signal?.id ?? 'none';
+  document.body.dataset.receiverQuality = String(state.telemetry.quality ?? 0);
+  document.body.dataset.receiverStability = String(state.telemetry.stability ?? 0);
+  document.body.dataset.arraySlew = state.observatory.array.slewProgress.toFixed(3);
+  state.nextAtmosphereUpdate = time + 620 + sessionRandom() * 1280;
 }
 
-function updateTelemetry(time) {
-  state.telemetry = sampleTelemetry(state.frequencyMHz, state.signals, time, state.radio, {
+function updateTelemetry(time, delta) {
+  const previousEventNumber = state.operations.eventNumber;
+  const baseTelemetry = sampleTelemetry(state.frequencyMHz, state.signals, time, state.radio, {
     bandwidth: CONFIG.lockToleranceRatio * state.settings.sensitivity,
   });
-  const previousEventNumber = state.operations.eventNumber;
-  updateOperations(state.operations, time, state.telemetry, state.mode);
+  state.telemetry = stepObservatory(state, time, baseTelemetry, delta);
+  document.body.dataset.telemetryLockable = String(state.telemetry.lockable);
   if (state.operations.eventNumber !== previousEventNumber && state.operations.lastEmittedEvent) {
     const event = state.operations.lastEmittedEvent;
     state.lastRenderedEventNumber = event.eventNumber;
@@ -334,6 +365,8 @@ function updateTelemetry(time) {
       state.scanning = false;
       setMode('tune');
       updateFrequency(state.telemetry.centerFrequency);
+      state.observatory.activeTarget = { ...findCatalogTarget(detectedSignal.id) };
+      state.observatory.mission.stage = 'TARGET_ACQUIRED';
       renderTransmission(detectedSignal);
       $('#lock-caption').textContent = 'CANDIDATE FOUND';
       toast(`Promising carrier found: ${detectedSignal.id}. Press LOCK to hold it.`, 'success');
@@ -362,7 +395,6 @@ function updateTelemetry(time) {
   $('#quality-bar').style.width = `${quality}%`;
   $('.signal-gauge').style.setProperty('--strength', `${clamp((strength + 120) / 120 * 180, 2, 178)}deg`);
   $('#noise-value').textContent = `${state.telemetry.noiseFloor.toFixed(0).replace('-', '−')} dBm`;
-  state.buffer = clamp(61 + proximity * 28 + quality * 0.12 + (Math.random() - 0.5) * 7, 0, 100);
   $('#buffer-value').textContent = `${Math.round(state.buffer)}%`;
   $('#buffer-bar').style.width = `${state.buffer}%`;
   $('#dish-value').textContent = `${state.operations.alignment.toFixed(1)}%`;
@@ -374,21 +406,25 @@ function updateTelemetry(time) {
   $('#temp-value').textContent = `${state.operations.temperature.toFixed(1)} °C`;
   $('#temp-bar').style.setProperty('--value', `${clamp(100 - Math.abs(state.operations.temperature + 195) * 18, 0, 100)}%`);
   $('#bandwidth-value').textContent = `${state.telemetry.bandwidth.toFixed(1)} Hz`;
-  audio.update({ ...state.telemetry, frequencyMHz: state.frequencyMHz });
+  audio.update({
+    ...state.telemetry,
+    frequencyMHz: state.frequencyMHz,
+    decoding: state.decoding,
+    lockState: state.lockedSignal ? 'LOCKED' : state.observatory.receiver.lockState,
+  });
   refreshAtmosphere(time);
   refreshActiveOverlay(time);
 }
 
-function animate(time) {
-  const delta = Math.min(48, time - state.lastFrame);
+function animate(time, schedulerDelta) {
+  const delta = Math.min(48, schedulerDelta || time - state.lastFrame);
   state.lastFrame = time;
   if (state.scanning && !state.pointerTuning && !state.settings.reducedMotion) {
     const ratio = (logFrequency(state.frequencyMHz) + CONFIG.scanSpeed * (delta / 1000)) % 1;
     updateFrequency(frequencyFromRatio(ratio));
   }
-  updateTelemetry(time);
-  renderer.draw(state, time);
-  requestAnimationFrame(animate);
+  updateTelemetry(time, delta);
+  renderer.draw(state, time, state.observatory.render.quality);
 }
 
 function tuneFromPointer(event) {
@@ -419,6 +455,7 @@ function tuneToSignal(signal) {
 
 function bindControls() {
   const track = $('#frequency-track');
+  const slider = $('#tuner-marker');
   track.addEventListener('pointerdown', async (event) => {
     state.pointerTuning = true;
     track.setPointerCapture(event.pointerId);
@@ -429,14 +466,14 @@ function bindControls() {
   track.addEventListener('pointerup', (event) => {
     state.pointerTuning = false;
     track.releasePointerCapture(event.pointerId);
-    saveState(state);
+    observatoryStore.persist();
   });
   track.addEventListener('wheel', (event) => {
     event.preventDefault();
     setMode('tune');
     updateFrequency(frequencyFromRatio(logFrequency(state.frequencyMHz) + Math.sign(event.deltaY) * 0.0032));
   }, { passive: false });
-  track.addEventListener('keydown', (event) => {
+  slider.addEventListener('keydown', (event) => {
     if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
     event.preventDefault();
     setMode('tune');
@@ -462,7 +499,7 @@ function bindControls() {
   $('#lock-button').addEventListener('click', async () => { await audio.start(); lockSignal(); });
   $('#decode-button').addEventListener('click', async () => { await audio.start(); decodeSignal(); });
 
-  $$('.main-nav button').forEach((button) => button.addEventListener('click', () => openView(button.dataset.view, button)));
+  $$('.main-nav [data-view]').forEach((button) => button.addEventListener('click', () => openView(button.dataset.view, button)));
   $('#overlay-close').addEventListener('click', closeOverlay);
   $('#overlay').addEventListener('click', (event) => {
     if (event.target === $('#overlay')) closeOverlay();
@@ -524,7 +561,9 @@ function bindControls() {
     }
   });
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeOverlay(); });
-  $('#view-all-logs').addEventListener('click', () => openView('logbook', $('.main-nav [data-view="logbook"]')));
+  $('#view-all-logs').addEventListener('click', () => {
+    document.dispatchEvent(new CustomEvent('tls:open-destination', { detail: { destination: 'evidence' } }));
+  });
 }
 
 function renderActiveView() {
@@ -601,7 +640,7 @@ function commitReceiverSettings() {
   state.settings.sensitivity = Number(range.value);
   audio.setEnabled(state.settings.audio);
   document.documentElement.classList.toggle('motion-reduced', state.settings.reducedMotion);
-  saveState(state);
+  observatoryStore.persist();
   toast('Receiver calibration committed to Array 7.', 'success');
   closeOverlay();
 }
@@ -618,12 +657,19 @@ async function boot() {
   const details = ['Synchronising atomic receiver clock...', 'Calibrating hydrogen-line filters...', 'Mapping local interference...', 'Opening listening window...'];
   let progress = 0;
   const timer = setInterval(() => {
-    progress = Math.min(96, progress + 7 + Math.random() * 12);
+    progress = Math.min(96, progress + 7 + sessionRandom() * 12);
     $('#boot-progress').style.width = `${progress}%`;
     $('#boot-detail').textContent = details[Math.min(details.length - 1, Math.floor(progress / 28))];
   }, 130);
   const catalog = await fetchSignalCatalog(state.sessionId);
   state.signals = catalog.signals;
+  const session = state.sessionToken ? null : await startSession(state.sessionId);
+  if (session?.token) {
+    state.sessionToken = session.token;
+    state.sessionMode.mode = session.persistenceMode;
+  }
+  const weather = await fetchSpaceWeather();
+  observatoryStore.patchSpaceWeather(weather);
   clearInterval(timer);
   $('#boot-progress').style.width = '100%';
   $('#boot-detail').textContent = catalog.source === 'server' ? 'Receiver linked to remote telemetry service.' : 'Receiver operating in autonomous local mode.';
@@ -633,15 +679,23 @@ async function boot() {
   renderDecode();
   renderOperations();
   bindControls();
-  setMode('scan');
+  setMode(localTestMode ? 'tune' : 'scan');
   setTimeout(() => {
     $('#boot-screen').classList.add('complete');
     $('#app').classList.add('ready');
     setTimeout(() => $('#boot-screen').remove(), 800);
   }, 340);
   setInterval(updateSessionTime, 1000);
-  setInterval(() => saveState(state), 12_000);
-  requestAnimationFrame(animate);
+  setInterval(() => observatoryStore.persist(), 12_000);
+  scheduler.add('receiver', animate);
+  scheduler.start();
+  document.addEventListener('visibilitychange', () => {
+    state.observatory.clock.paused = document.hidden;
+    state.observatory.clock.lastRealMs = null;
+    state.observatory.render.hidden = document.hidden;
+    if (document.hidden) scheduler.stop();
+    else scheduler.start();
+  });
 }
 
 boot();
