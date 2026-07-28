@@ -1,0 +1,57 @@
+/* Layout safeguards for the observatory expansion. */
+
+.main-nav[data-observatory-expanded="true"] {
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(66, 172, 186, .34) transparent;
+}
+
+.main-nav[data-observatory-expanded="true"] > button {
+  height: 43px;
+  min-height: 43px;
+  flex: 0 0 auto;
+}
+
+.main-nav[data-observatory-expanded="true"]::-webkit-scrollbar { width: 4px; }
+.main-nav[data-observatory-expanded="true"]::-webkit-scrollbar-thumb { background: rgba(66, 172, 186, .28); }
+
+.frequency-panel { overflow: hidden; }
+
+.detection-panel:has(.observatory-deck-launcher) {
+  grid-template-rows: 25px minmax(0, 1fr) 38px 132px;
+}
+
+.observatory-deck-launcher {
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 1250px) {
+  .detection-panel:has(.observatory-deck-launcher) {
+    grid-template-rows: 25px minmax(0, 1fr) 38px;
+  }
+}
+
+@media (max-width: 900px) {
+  .main-nav[data-observatory-expanded="true"] {
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .main-nav[data-observatory-expanded="true"] > button {
+    min-width: 145px;
+    width: auto;
+    height: 55px;
+    min-height: 55px;
+  }
+
+  .main-nav[data-observatory-expanded="true"] > .observatory-nav-divider {
+    min-width: 128px;
+    min-height: 55px;
+    flex: 0 0 128px;
+    border-top: 0;
+    border-bottom: 0;
+    border-right: 1px solid rgba(45, 91, 108, .17);
+  }
+}
