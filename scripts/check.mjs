@@ -15,6 +15,7 @@ const required = [
   'src/modules/operations.js',
   'src/modules/overlay-views.js',
   'src/modules/observatory-data.js',
+  'src/modules/observatory-guard.js',
   'src/modules/observatory-expansion.js',
   'public/black-hole-observatory.png',
   'api/signals.js',
@@ -29,6 +30,7 @@ const html = await readFile(join(root, 'index.html'), 'utf8');
 const app = await readFile(join(root, 'src/app.js'), 'utf8');
 const styles = await readFile(join(root, 'src/styles.css'), 'utf8');
 const expansion = await readFile(join(root, 'src/modules/observatory-expansion.js'), 'utf8');
+const data = await readFile(join(root, 'src/modules/observatory-data.js'), 'utf8');
 const requiredIds = ['frequency-track', 'frequency-canvas', 'waterfall-canvas', 'decode-button', 'detection-log', 'overlay'];
 for (const id of requiredIds) {
   if (!html.includes(`id="${id}"`)) throw new Error(`Missing DOM id: ${id}`);
@@ -37,11 +39,12 @@ for (const id of requiredIds) {
 
 if (!html.includes('/src/modules/observatory-expansion.js')) throw new Error('Expansion module is not loaded by index.html');
 if (!styles.includes('part-9.css') || !styles.includes('part-10.css')) throw new Error('Expansion styles are not loaded');
+if (!data.includes("import './observatory-guard.js'")) throw new Error('Observatory state guard is not loaded');
 for (const marker of ['ARRAY CORE', 'SIGNAL FORENSICS', 'CELESTIAL NAVIGATION', 'EVIDENCE VAULT']) {
   if (!expansion.includes(marker)) throw new Error(`Missing expansion world: ${marker}`);
 }
 
-for (const path of ['src/modules/observatory-data.js', 'src/modules/observatory-expansion.js']) {
+for (const path of ['src/modules/observatory-data.js', 'src/modules/observatory-guard.js', 'src/modules/observatory-expansion.js']) {
   execFileSync(process.execPath, ['--check', join(root, path)], { stdio: 'inherit' });
 }
 
