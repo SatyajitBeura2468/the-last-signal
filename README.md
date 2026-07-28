@@ -1,68 +1,64 @@
 # THE LAST SIGNAL
 
-> Something has been broadcasting for 14,000 years.
+> A deterministic, living deep-space observatory wrapped in a cinematic signal-hunting interface.
 
-**The Last Signal** is a cinematic deep-space signal hunting experience. Tune a logarithmic receiver, isolate coherent carriers, lock transmissions, decode fragments, and build a persistent archive of discoveries.
+The Last Signal is a browser-based operations experience for fictional Deep Space Array 7. Tune a logarithmic receiver, point and phase a six-dish array, manage power and cryogenic reserves, diagnose incidents, build repeatable evidence, and unlock transmissions only after the observation chain is complete.
 
-![The Last Signal interface](./preview.jpg)
+The observatory is fictional. Astronomy is calculated locally, space-weather conditions are adapted from NOAA SWPC, and any fallback or seeded value is labelled in the interface.
 
-## Live experience
+## Live observatory
 
-<p align="center">
-  <a href="https://the-last-signal-eosin.vercel.app/">
-    <img src="https://img.shields.io/badge/ENTER_THE_LAST_SIGNAL-07111f?style=for-the-badge&logo=vercel&logoColor=8ff5d2&labelColor=07111f&color=18384a" alt="Enter The Last Signal" />
-  </a>
-</p>
+**[Enter The Last Signal](https://the-last-signal-eosin.vercel.app/)**
 
-> **[Launch the live receiver →](https://the-last-signal-eosin.vercel.app/)**
+## Living Observatory V2
 
-The production experience is deployed on Vercel and ready to explore in the browser.
-
-## Core systems
-
-- Logarithmic 10 MHz to 100 GHz frequency tuner
-- Pointer, wheel, keyboard, and touch controls
-- Procedural real-time spectrum, waterfall, stability, radar, and noise canvases
-- Web Audio static and dynamic carrier tones
-- Deterministic serverless signal catalogue
-- Server-validated progressive decoding
-- Persistent local receiver state and discovery archive
-- Responsive desktop, tablet, and mobile layouts
-- Reduced-motion and audio controls
-- Zero runtime package dependencies
+- Six authoritative destinations: Live Ops, Receiver, Signal Lab, Sky Control, Evidence, and Systems
+- Central versioned state store with schema validation, migration, persistence, and corruption recovery
+- Seeded simulation clock and deterministic array, receiver, resource, incident, and mission models
+- Six individually modelled dishes with azimuth, elevation, slew, phase, clock, wind, and availability state
+- Causal command bus with queued, running, complete, and evidence-producing actions
+- Evidence-gated mission lifecycle: target → observation → corrections → correlation → revisit → commit → decode
+- Secure server-side decode progression with signed stateless session tokens
+- One shared signal catalogue containing candidates and explicit false-positive controls
+- NOAA SWPC server adapter with caching, freshness metadata, timeout handling, and honest fallback reasons
+- Julian date, local sidereal time, equatorial-to-horizontal conversion, rise/set estimation, and solar altitude
+- Deterministic temporal waterfall rendering with resize, visibility, DPR, and reduced-motion controls
+- Web Audio receiver tone with smooth parameter changes and background-tab suspension
+- Mobile command dock, safe-area support, touch-sized controls, and no page-level horizontal overflow
 
 ## Architecture
 
 ```text
-.
-├── api/
-│   ├── decode.js
-│   ├── session.js
-│   └── signals.js
-├── public/
-│   └── favicon.svg
-├── scripts/
-│   └── check.mjs
-├── src/
-│   ├── app.js
-│   ├── styles.css
-│   └── modules/
-│       ├── api-client.js
-│       ├── audio-engine.js
-│       ├── config.js
-│       ├── signal-engine.js
-│       ├── spectrum-renderer.js
-│       ├── starfield.js
-│       └── store.js
-├── dev-server.mjs
-├── index.html
-├── package.json
-└── vercel.json
+api/                 signed session, decode, catalogue, and NOAA adapters
+src/core/            event bus, schema, persistence, clock, scheduler, selectors, store
+src/data/            source registry and client adapters
+src/simulation/      astronomy, array, resources, receiver, incidents, mission, signals
+src/modules/         interface controllers, audio, overlays, renderer, compatibility views
+src/styles/          observatory responsive and accessibility layer
+tests/unit/          mathematical and deterministic model tests
+tests/integration/   mission lifecycle and server boundary tests
+tests/e2e/           desktop/mobile workflows and accessibility checks
 ```
+
+The application keeps one authoritative root state. Simulation modules are pure or state-scoped, interface modules consume selectors, and persistence stores only validated, size-bounded user state. Serverless routes never expose decoded fragments through the public catalogue.
+
+## Data provenance
+
+- Space-weather speed: NOAA SWPC real-time solar-wind speed product
+- Interplanetary magnetic field: NOAA SWPC real-time magnetic-field product
+- Planetary activity: NOAA SWPC planetary K-index product
+- Proton density: deterministic fallback until a compatible upstream product is available
+- Astronomy: local calculations from station coordinates and simulation UTC
+- Deep Space Array 7, signals, incidents, and missions: clearly fictional deterministic simulation
+
+Every source records status, fetch time, source timestamp, staleness, and fallback reason. The server adapter uses a bounded timeout and a 15-minute cache.
 
 ## Local development
 
+Requires Node.js 22.
+
 ```bash
+npm ci
 npm run dev
 ```
 
@@ -72,19 +68,20 @@ Open `http://127.0.0.1:4173`.
 
 ```bash
 npm run check
+npm test
+npm run test:e2e
+npm run test:all
 ```
+
+The end-to-end suite validates the main evidence-gated mission workflow, mobile overflow, keyboard tuning, focus restoration, and serious/critical Axe accessibility findings.
+
+## Persistence and privacy
+
+The experience is anonymous and requires no account. Receiver preferences, validated observatory progress, operator notes, and the local evidence archive remain in browser storage. Oversized or invalid saved state is rejected and recovered to a known schema. No credentials or secrets are shipped to the client.
 
 ## Deployment
 
-The repository is configured for Vercel static hosting plus Node.js serverless functions. No build step or package installation is required.
-
-## Controls
-
-- Drag across the frequency band to tune.
-- Use the mouse wheel or arrow keys for precise tuning.
-- Select **Scan** for automatic hopping.
-- Select **Lock** near a coherent carrier.
-- Select **Decode** after a successful lock.
+`vercel.json` configures static hosting, serverless API routes, clean URLs, strict browser permissions, content security policy, and source rewrites. CI runs static checks, unit/integration tests, browser workflows, and accessibility checks on Node.js 22.
 
 ## License
 

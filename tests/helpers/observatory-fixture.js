@@ -1,0 +1,113 @@
+import { createSimulationClock } from '../../src/core/simulation-clock.js';
+import { createDishState } from '../../src/simulation/array-model.js';
+import { UNIFIED_SIGNAL_CATALOG } from '../../src/simulation/signal-model.js';
+
+const nodes = [
+  ['DISH-01', 'North Baseline', 18, 62, 98.7, 'PRIMARY'],
+  ['DISH-02', 'East Horizon', 74, 51, 96.2, 'PHASE'],
+  ['DISH-03', 'Cryo Reference', 132, 44, 93.8, 'REFERENCE'],
+  ['DISH-04', 'Long Baseline', 201, 38, 97.5, 'PRIMARY'],
+  ['DISH-05', 'South Relay', 257, 47, 91.6, 'RELAY'],
+  ['DISH-06', 'Western Aperture', 318, 58, 95.4, 'PHASE'],
+].map(([id, name, bearing, elevation, health, role]) => ({ id, name, bearing, elevation, health, role }));
+
+export function createObservatoryFixture() {
+  const target = { ...UNIFIED_SIGNAL_CATALOG[0] };
+  return {
+    version: 2,
+    seed: 42,
+    lastFrame: 0,
+    lockedSignal: null,
+    operations: {
+      currentEvent: { severity: 'nominal', title: 'ARRAY NOMINAL', message: 'Nominal' },
+      eventNumber: 0,
+      alignment: 0,
+      power: 0,
+      temperature: -195,
+      boost: 22,
+      clockDrift: 0,
+      lastEmittedEvent: null,
+    },
+    observatory: {
+      clock: createSimulationClock({ now: Date.parse('2026-07-28T18:00:00Z') }),
+      station: { coordinates: { latitudeDeg: 19.145, longitudeDeg: 82.257 } },
+      activeTarget: target,
+      astronomy: {
+        lstHours: 0,
+        hourAngleDeg: 0,
+        altitudeDeg: 0,
+        azimuthDeg: 0,
+        airMass: Infinity,
+        visible: false,
+        sunAltitudeDeg: 0,
+        windowLabel: '',
+      },
+      array: {
+        dishes: nodes.map(createDishState),
+        baseline: 'LONG',
+        windSpeedKph: 14,
+        elapsedSeconds: 0,
+        slewProgress: 0,
+        coherence: 0.8,
+        alignment: 0,
+        phaseError: 0.8,
+        clockOffsetNs: 5,
+        integrity: 96,
+      },
+      receiver: {
+        gain: 22,
+        noiseFloor: -106,
+        bandwidth: 0.5,
+        frequencyMHz: target.frequencyMHz,
+        thermalContribution: 1.5,
+        rfiContribution: 1,
+        atmosphericContribution: 1,
+        clockContribution: 0,
+        signalContribution: 0,
+        snr: 0,
+        coherence: 0.7,
+        lockState: 'SEARCHING',
+      },
+      resources: {
+        mainPower: 98,
+        reservePower: 31,
+        cryogenicReserve: 74,
+        thermalLoad: 21,
+        dataBuffer: 42,
+        processingLoad: 18,
+      },
+      environment: {
+        solarWindSpeed: 388,
+        protonDensity: 4.2,
+        imfMagnitude: 5.7,
+        bz: -1.4,
+        kpIndex: 2,
+        rfiLevel: 0.08,
+        spaceWeatherPenalty: 0.2,
+      },
+      sources: {
+        astronomy: { status: 'CALCULATED', value: null, fetchedAt: null, sourceTimestamp: null },
+        spaceWeather: { status: 'SIMULATED' },
+      },
+      mission: {
+        stage: 'IDLE',
+        integrationSeconds: 0,
+        requiredIntegrationSeconds: 1,
+        sampleCount: 0,
+        candidateId: null,
+        correctionsApplied: 0,
+        correlation: 21,
+        revisitScheduled: false,
+        revisitConfirmed: false,
+        evidenceCommitted: false,
+      },
+      incidents: { active: null, history: [], cooldownSeconds: 0 },
+      commands: [],
+      commandSequence: 0,
+      eventLog: [],
+      lab: { filters: { rfi: false, doppler: false, phase: false, fold: false }, correlation: 21 },
+      navigation: { scheduled: [], baseline: 'LONG' },
+      vault: { entries: [], notes: '', sealed: false },
+    },
+  };
+}
