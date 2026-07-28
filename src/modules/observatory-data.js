@@ -1,3 +1,5 @@
+import './observatory-guard.js';
+
 export const OBSERVATORY_WORLDS = [
   { id: 'array', label: 'ARRAY CORE', short: 'CORE', index: '07A' },
   { id: 'lab', label: 'SIGNAL FORENSICS', short: 'LAB', index: '07B' },
