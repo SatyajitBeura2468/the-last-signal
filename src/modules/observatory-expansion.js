@@ -1,81 +1,29 @@
 import {
   ARRAY_NODES,
-  INCIDENT_LIBRARY,
   OBSERVATORY_WORLDS,
   SIGNAL_CANDIDATES,
   SKY_SECTORS,
 } from './observatory-data.js';
+import { observatoryStore } from '../core/observatory-store.js';
+import { selectDecodeEvidence, selectDecodeReady } from '../core/selectors.js';
+import { queueCommand } from '../simulation/mission-engine.js';
+import { findCatalogTarget } from '../simulation/signal-model.js';
 
-const STORAGE_KEY = 'tls:observatory-expansion:v1';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const formatGHz = (mhz) => mhz >= 1000 ? `${(mhz / 1000).toFixed(6)} GHz` : `${mhz.toFixed(6)} MHz`;
 
-const DEFAULT_STATE = {
-  version: 1,
-  cycle: 7,
-  selectedWorld: 'array',
-  selectedDish: 'DISH-01',
-  selectedCandidate: 'CND-19K-204',
-  selectedSector: 'aquila',
-  array: {
-    integrity: 96.4,
-    phaseError: 0.82,
-    cryoReserve: 74,
-    reservePower: 31,
-    actions: [],
-  },
-  lab: {
-    filters: { rfi: false, doppler: false, phase: false, fold: false },
-    correlation: 21,
-    confidenceBonus: 0,
-    committed: [],
-  },
-  navigation: {
-    scheduled: [],
-    baseline: 'LONG',
-  },
-  vault: {
-    notes: '',
-    sealed: false,
-    entries: [],
-  },
-  eventLog: [
-    { time: '00:00:02', severity: 'nominal', title: 'OBSERVATION CYCLE 07', message: 'Array 7 entered autonomous deep-field listening mode.' },
-  ],
-};
-
-function loadState() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (!parsed || parsed.version !== 1) return structuredClone(DEFAULT_STATE);
-    return {
-      ...structuredClone(DEFAULT_STATE),
-      ...parsed,
-      array: { ...DEFAULT_STATE.array, ...(parsed.array || {}) },
-      lab: {
-        ...DEFAULT_STATE.lab,
-        ...(parsed.lab || {}),
-        filters: { ...DEFAULT_STATE.lab.filters, ...(parsed.lab?.filters || {}) },
-      },
-      navigation: { ...DEFAULT_STATE.navigation, ...(parsed.navigation || {}) },
-      vault: { ...DEFAULT_STATE.vault, ...(parsed.vault || {}) },
-    };
-  } catch {
-    return structuredClone(DEFAULT_STATE);
-  }
-}
-
-const state = loadState();
+const rootState = observatoryStore.state;
+const state = rootState.observatory;
 let worldOverlay = null;
 let lastFocused = null;
-let incidentIndex = 0;
 let lastKnownCarrier = '';
 let worldCanvasFrame = null;
+let lastCommandFingerprint = '';
 
 function persist() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  observatoryStore.persist();
 }
 
 function nowCode() {
@@ -87,7 +35,7 @@ function addEvent(title, message, severity = 'info') {
   state.eventLog = state.eventLog.slice(0, 30);
   persist();
   updateTicker();
-  if (worldOverlay && !worldOverlay.hidden && state.selectedWorld === 'array') renderWorld();
+  if (worldOverlay && !worldOverlay.hidden && state.selectedWorld === 'live-ops') renderWorld();
 }
 
 function toast(message, tone = 'info') {
@@ -106,10 +54,11 @@ function toast(message, tone = 'info') {
 
 function svgIcon(type) {
   const paths = {
-    array: '<circle cx="12" cy="12" r="8"/><path d="M4 14c5-.5 9-4.5 10-10M7 18c5-1 10-6 11-11"/><circle cx="6" cy="16" r="1.4"/>',
+    'live-ops': '<circle cx="12" cy="12" r="8"/><path d="M4 14c5-.5 9-4.5 10-10M7 18c5-1 10-6 11-11"/><circle cx="6" cy="16" r="1.4"/>',
     lab: '<path d="M3 12h3l2-6 4 12 3-9 3 6h3"/><path d="M4 20h16"/>',
-    nav: '<circle cx="12" cy="12" r="9"/><path d="m12 4 2.1 5.9L20 12l-5.9 2.1L12 20l-2.1-5.9L4 12l5.9-2.1L12 4Z"/>',
-    vault: '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h6M8 16h4"/>',
+    sky: '<circle cx="12" cy="12" r="9"/><path d="m12 4 2.1 5.9L20 12l-5.9 2.1L12 20l-2.1-5.9L4 12l5.9-2.1L12 4Z"/>',
+    evidence: '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h6M8 16h4"/>',
+    systems: '<circle cx="12" cy="12" r="3"/><path d="M4 12h3M17 12h3M12 4v3M12 17v3"/>',
   };
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[type]}</svg>`;
 }
@@ -118,23 +67,35 @@ function injectNavigation() {
   const nav = $('.main-nav');
   if (!nav || nav.dataset.observatoryExpanded) return;
   nav.dataset.observatoryExpanded = 'true';
-  const divider = document.createElement('div');
-  divider.className = 'observatory-nav-divider';
-  divider.innerHTML = '<span>OBSERVATORY DECKS</span><i></i>';
-  nav.append(divider);
+  $$('[data-destination]', nav).forEach((button) => button.addEventListener('click', () => {
+    const destination = button.dataset.destination;
+    if (destination === 'receiver') closeWorld();
+    else openWorld(destination, button);
+  }));
 
-  for (const world of OBSERVATORY_WORLDS) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'observatory-nav-button';
-    button.dataset.observatoryWorld = world.id;
-    button.innerHTML = `${svgIcon(world.id)}<span>${world.short}</span><small>${world.index}</small>`;
-    button.addEventListener('click', (event) => {
-      event.stopImmediatePropagation();
-      openWorld(world.id, button);
-    });
-    nav.append(button);
-  }
+  const mobileDock = document.createElement('nav');
+  mobileDock.className = 'mobile-observatory-dock';
+  mobileDock.setAttribute('aria-label', 'Primary observatory destinations');
+  mobileDock.innerHTML = [
+    ['receiver', 'RCV', 'Receiver'],
+    ['live-ops', 'OPS', 'Live Ops'],
+    ['lab', 'LAB', 'Signal Lab'],
+    ['sky', 'SKY', 'Sky'],
+    ['evidence', 'EVD', 'Evidence'],
+  ].map(([id, short, label]) => `<button type="button" data-mobile-destination="${id}" aria-label="${label}" class="${id === 'receiver' ? 'active' : ''}"><i></i><span>${short}</span></button>`).join('');
+  const systems = document.createElement('button');
+  systems.type = 'button';
+  systems.className = 'mobile-systems-control';
+  systems.dataset.mobileDestination = 'systems';
+  systems.setAttribute('aria-label', 'Open Systems');
+  systems.innerHTML = `${svgIcon('systems')}<span>SYSTEMS</span>`;
+  document.body.append(mobileDock, systems);
+  $$('[data-mobile-destination]').forEach((button) => button.addEventListener('click', () => {
+    const destination = button.dataset.mobileDestination;
+    if (destination === 'receiver') closeWorld();
+    else openWorld(destination, button);
+  }));
+  document.addEventListener('tls:open-destination', (event) => openWorld(event.detail?.destination || 'live-ops'));
 }
 
 function injectLiveInstrumentation() {
@@ -146,12 +107,12 @@ function injectLiveInstrumentation() {
     strip.innerHTML = `
       <div><span>UTC</span><b id="obs-utc">--:--:--</b></div>
       <div><span>LOCAL SIDEREAL</span><b id="obs-lst">--:--:--</b></div>
-      <div><span>BARYCENTRIC Δ</span><b id="obs-bary">+0.00 km/s</b></div>
-      <div><span>SOLAR WIND</span><b id="obs-solar">--- km/s</b></div>
+      <div><span>TARGET ALT / AZ</span><b id="obs-bary">-- / --</b></div>
+      <div><span>SOLAR WIND <em id="obs-source-state">SIM</em></span><b id="obs-solar">--- km/s</b></div>
       <div><span>CLOCK OFFSET</span><b id="obs-clock">-- ns</b></div>
-      <button type="button" data-open-observatory="array"><i></i><span>OBSERVATORY LIVE</span><small>CYCLE ${String(state.cycle).padStart(2, '0')}</small></button>`;
+      <button type="button" data-open-observatory="live-ops"><i></i><span>OBSERVATORY LIVE</span><small>CYCLE ${String(state.cycle).padStart(2, '0')}</small></button>`;
     header.append(strip);
-    $('[data-open-observatory="array"]', strip).addEventListener('click', (event) => openWorld('array', event.currentTarget));
+    $('[data-open-observatory="live-ops"]', strip).addEventListener('click', (event) => openWorld('live-ops', event.currentTarget));
   }
 
   const frequencyPanel = $('.frequency-panel');
@@ -177,8 +138,13 @@ function injectLiveInstrumentation() {
     const launcher = document.createElement('section');
     launcher.className = 'observatory-deck-launcher';
     launcher.innerHTML = `
-      <header><span>CONNECTED DECKS</span><b>04</b></header>
-      <div>${OBSERVATORY_WORLDS.map((world) => `<button type="button" data-open-observatory="${world.id}"><i>${world.index}</i><span>${world.label}</span><b>→</b></button>`).join('')}</div>`;
+      <header><span>OBSERVATION CHAIN</span><b id="mission-stage">${state.mission.stage}</b></header>
+      <div class="mission-lifecycle">
+        <button type="button" data-open-observatory="live-ops"><i>01</i><span>TARGET + ARRAY</span><b id="mission-target-state">SLEW</b></button>
+        <button type="button" data-open-observatory="lab"><i>02</i><span>FORENSIC ANALYSIS</span><b id="mission-lab-state">WAIT</b></button>
+        <button type="button" data-open-observatory="sky"><i>03</i><span>REVISIT WINDOW</span><b id="mission-revisit-state">WAIT</b></button>
+        <button type="button" data-open-observatory="evidence"><i>04</i><span>EVIDENCE COMMIT</span><b id="mission-evidence-state">SEALED</b></button>
+      </div>`;
     rightRail.append(launcher);
     $$('[data-open-observatory]', launcher).forEach((button) => button.addEventListener('click', () => openWorld(button.dataset.openObservatory, button)));
   }
@@ -188,9 +154,9 @@ function injectLiveInstrumentation() {
     const ticker = document.createElement('button');
     ticker.type = 'button';
     ticker.className = 'observatory-event-ticker';
-    ticker.dataset.openObservatory = 'array';
+    ticker.dataset.openObservatory = 'live-ops';
     ticker.innerHTML = '<i></i><span id="obs-ticker-label">ARRAY EVENT</span><b id="obs-ticker-message">Waiting for operations telemetry...</b><em>OPEN DECK</em>';
-    ticker.addEventListener('click', () => openWorld('array', ticker));
+    ticker.addEventListener('click', () => openWorld('live-ops', ticker));
     footer.append(ticker);
   }
 }
@@ -234,13 +200,15 @@ function createWorldOverlay() {
 }
 
 function openWorld(worldId, trigger) {
-  const valid = OBSERVATORY_WORLDS.some((world) => world.id === worldId) ? worldId : 'array';
+  const valid = OBSERVATORY_WORLDS.some((world) => world.id === worldId) ? worldId : 'live-ops';
   state.selectedWorld = valid;
   persist();
   lastFocused = trigger || document.activeElement;
   worldOverlay = createWorldOverlay();
   worldOverlay.hidden = false;
   document.body.classList.add('observatory-world-open');
+  $$('[data-destination]').forEach((item) => item.classList.toggle('active', item.dataset.destination === valid));
+  $$('[data-mobile-destination]').forEach((item) => item.classList.toggle('active', item.dataset.mobileDestination === valid));
   requestAnimationFrame(() => worldOverlay.classList.add('visible'));
   renderWorld();
   $('.observatory-world-close', worldOverlay).focus();
@@ -252,6 +220,8 @@ function closeWorld() {
   document.body.classList.remove('observatory-world-open');
   cancelAnimationFrame(worldCanvasFrame);
   setTimeout(() => { worldOverlay.hidden = true; }, 240);
+  $$('[data-destination]').forEach((item) => item.classList.toggle('active', item.dataset.destination === 'receiver'));
+  $$('[data-mobile-destination]').forEach((item) => item.classList.toggle('active', item.dataset.mobileDestination === 'receiver'));
   lastFocused?.focus?.();
 }
 
@@ -259,25 +229,43 @@ function renderWorld() {
   if (!worldOverlay) return;
   const world = OBSERVATORY_WORLDS.find((item) => item.id === state.selectedWorld) || OBSERVATORY_WORLDS[0];
   $$('[data-world-tab]', worldOverlay).forEach((button) => button.classList.toggle('active', button.dataset.worldTab === world.id));
-  $('#observatory-world-index', worldOverlay).textContent = `${world.index} / ${world.id === 'array' ? 'OPERATIONS' : world.id === 'lab' ? 'ANALYSIS' : world.id === 'nav' ? 'ASTROMETRY' : 'PROVENANCE'}`;
+  $('#observatory-world-index', worldOverlay).textContent = `${world.index} / ${world.id === 'live-ops' ? 'OPERATIONS' : world.id === 'lab' ? 'ANALYSIS' : world.id === 'sky' ? 'ASTROMETRY' : world.id === 'evidence' ? 'PROVENANCE' : 'CONTROL'}`;
   $('#observatory-world-title', worldOverlay).textContent = world.label;
   $('#observatory-world-description', worldOverlay).textContent = {
-    array: 'Live control of the six-dish interferometric array and its physical subsystems.',
+    'live-ops': 'Live control of the six-dish interferometric array, incidents and timed commands.',
     lab: 'Forensic isolation, correction and classification of every suspicious carrier.',
-    nav: 'Sky-vector planning, baseline geometry and observation-window scheduling.',
-    vault: 'Persistent evidence, operator annotations and the complete chain of discovery.',
+    sky: 'Accurate target visibility, dish pointing and observation-window scheduling.',
+    evidence: 'Persistent evidence, operator annotations and the complete chain of discovery.',
+    systems: 'Rendering, data provenance, persistence and resource controls.',
   }[world.id];
   $('#world-integrity', worldOverlay).textContent = `${state.array.integrity.toFixed(1)}%`;
   $('#world-event-count', worldOverlay).textContent = String(state.eventLog.length);
   const content = $('#observatory-world-content', worldOverlay);
-  content.innerHTML = world.id === 'array' ? renderArrayCore() : world.id === 'lab' ? renderSignalLab() : world.id === 'nav' ? renderNavigation() : renderVault();
+  content.innerHTML = world.id === 'live-ops'
+    ? renderArrayCore()
+    : world.id === 'lab'
+      ? renderSignalLab()
+      : world.id === 'sky'
+        ? renderNavigation()
+        : world.id === 'evidence'
+          ? renderVault()
+          : renderSystems();
   cancelAnimationFrame(worldCanvasFrame);
   requestAnimationFrame(() => drawWorldCanvases(world.id));
 }
 
 function renderArrayCore() {
-  const dish = ARRAY_NODES.find((item) => item.id === state.selectedDish) || ARRAY_NODES[0];
+  const liveDish = state.array.dishes.find((item) => item.id === state.selectedDish) || state.array.dishes[0];
+  const dishMeta = ARRAY_NODES.find((item) => item.id === liveDish.id) || ARRAY_NODES[0];
+  const dish = {
+    ...dishMeta,
+    bearing: liveDish.currentAzimuth,
+    elevation: liveDish.currentElevation,
+    health: liveDish.servoHealth,
+    role: liveDish.role,
+  };
   const actions = state.array.actions.slice(0, 5);
+  const activeCommand = state.commands.find((command) => ['QUEUED', 'RUNNING'].includes(command.status));
   return `
     <section class="array-world-grid">
       <article class="world-module array-topology">
@@ -285,10 +273,10 @@ function renderArrayCore() {
         <div class="array-field">
           <div class="array-range range-a"></div><div class="array-range range-b"></div><div class="array-range range-c"></div>
           <div class="array-phase-beam"></div><div class="array-hub"><i></i><b>DSA-7</b><span>PHASE CORE</span></div>
-          ${ARRAY_NODES.map((node, index) => `<button type="button" class="dish-node ${node.id === dish.id ? 'active' : ''}" data-select-dish="${node.id}" style="--angle:${node.bearing}deg;--radius:${index % 2 ? 38 : 45}%"><i></i><span>${node.id}<small>${node.health.toFixed(1)}%</small></span></button>`).join('')}
+          ${state.array.dishes.map((node, index) => `<button type="button" class="dish-node ${node.id === dish.id ? 'active' : ''}" data-select-dish="${node.id}" style="--angle:${node.currentAzimuth}deg;--radius:${index % 2 ? 38 : 45}%"><i></i><span>${node.id}<small>${node.servoHealth.toFixed(1)}%</small></span></button>`).join('')}
           <canvas id="array-link-canvas" aria-hidden="true"></canvas>
         </div>
-        <footer><span>BASELINE ${state.navigation.baseline}</span><span>PHASE ERROR ${state.array.phaseError.toFixed(2)} mrad</span><span>INTEGRATION 18.4 s</span></footer>
+        <footer><span>BASELINE ${state.navigation.baseline}</span><span>PHASE ERROR ${state.array.phaseError.toFixed(2)} mrad</span><span>INTEGRATION ${state.mission.integrationSeconds.toFixed(1)} / ${state.mission.requiredIntegrationSeconds.toFixed(1)} s</span></footer>
       </article>
 
       <aside class="world-module dish-inspector">
@@ -298,8 +286,8 @@ function renderArrayCore() {
           <div><dt>AZIMUTH</dt><dd>${dish.bearing.toFixed(1)}°</dd></div>
           <div><dt>ELEVATION</dt><dd>${dish.elevation.toFixed(1)}°</dd></div>
           <div><dt>SERVO HEALTH</dt><dd>${dish.health.toFixed(1)}%</dd></div>
-          <div><dt>PHASE DELAY</dt><dd>${(dish.bearing / 91).toFixed(3)} ns</dd></div>
-          <div><dt>WIND LOAD</dt><dd>${(12 + dish.elevation / 17).toFixed(1)}%</dd></div>
+          <div><dt>PHASE DELAY</dt><dd>${liveDish.phaseOffset.toFixed(3)} ns</dd></div>
+          <div><dt>WIND LOAD</dt><dd>${liveDish.windLoad.toFixed(1)}%</dd></div>
         </dl>
         <div class="dish-health-track"><i style="width:${dish.health}%"></i></div>
         <button type="button" data-array-action="park">PARK SELECTED DISH <b>→</b></button>
@@ -308,9 +296,9 @@ function renderArrayCore() {
       <article class="world-module subsystem-rack">
         <header><span>PHYSICAL SUBSYSTEMS</span><b>LIVE CONTROL</b></header>
         <div class="subsystem-columns">
-          <section><span>CRYOGENIC LOOP</span><strong>−${(194.8 + (100 - state.array.cryoReserve) * .018).toFixed(2)} °C</strong><div><i style="width:${state.array.cryoReserve}%"></i></div><small>${state.array.cryoReserve}% reserve / helium circuit nominal</small><button type="button" data-array-action="cryo">FLUSH RESERVE LOOP</button></section>
+          <section><span>CRYOGENIC LOOP</span><strong>${(-196.2 + state.resources.thermalLoad * .055).toFixed(2)} °C</strong><div><i style="width:${state.resources.cryogenicReserve}%"></i></div><small>${state.resources.cryogenicReserve.toFixed(1)}% reserve / ${state.resources.thermalLoad.toFixed(1)}% thermal load</small><button type="button" data-array-action="cryo">FLUSH RESERVE LOOP</button></section>
           <section><span>PHASE DISCIPLINE</span><strong>${state.array.phaseError.toFixed(2)} mrad</strong><div><i style="width:${clamp(100 - state.array.phaseError * 26, 5, 100)}%"></i></div><small>Atomic reference / six-node convergence</small><button type="button" data-array-action="calibrate">CALIBRATE BASELINES</button></section>
-          <section><span>RESERVE POWER</span><strong>${state.array.reservePower}%</strong><div><i style="width:${state.array.reservePower}%"></i></div><small>Independent bus / receiver-first priority</small><button type="button" data-array-action="power">REROUTE POWER</button></section>
+          <section><span>RESERVE POWER</span><strong>${state.resources.reservePower.toFixed(1)}%</strong><div><i style="width:${state.resources.reservePower}%"></i></div><small>Main bus ${state.resources.mainPower.toFixed(1)}% / receiver-first priority</small><button type="button" data-array-action="power">REROUTE POWER</button></section>
         </div>
       </article>
 
@@ -320,8 +308,8 @@ function renderArrayCore() {
       </article>
 
       <article class="world-module command-sequence">
-        <header><span>RECENT COMMANDS</span><b>${actions.length ? 'COMMITTED' : 'IDLE'}</b></header>
-        <div>${actions.length ? actions.map((action) => `<p><time>${action.time}</time><span>${action.label}</span><b>${action.result}</b></p>`).join('') : '<p class="world-empty">No manual command has been committed during this cycle.</p>'}</div>
+        <header><span>COMMAND EXECUTION</span><b>${activeCommand ? activeCommand.status : 'IDLE'}</b></header>
+        <div>${activeCommand ? `<p class="active-command"><time>${Math.round(activeCommand.progress * 100)}%</time><span>${activeCommand.label}</span><b>${activeCommand.status}</b></p><div class="command-progress"><i style="width:${activeCommand.progress * 100}%"></i></div>` : actions.length ? actions.map((action) => `<p><time>${action.time}</time><span>${action.label}</span><b>${action.result}</b></p>`).join('') : '<p class="world-empty">No manual command has been committed during this cycle.</p>'}</div>
         <button type="button" data-array-action="diagnostic">RUN FULL ARRAY DIAGNOSTIC <b>→</b></button>
       </article>
     </section>`;
@@ -384,7 +372,7 @@ function renderSignalLab() {
       <article class="world-module correlation-bay">
         <header><span>CROSS-CORRELATION BAY</span><b>${state.lab.correlation}% MATCH</b></header>
         <div class="correlation-plot"><canvas id="lab-correlation-canvas"></canvas><i style="left:${state.lab.correlation}%"></i></div>
-        <p>Compare the candidate against the hydrogen line, known pulsars, local emitters, maser catalogues and previously recovered carriers.</p>
+        <p>Compare the candidate against the hydrogen line, known pulsars, local emitters, maser catalogues and previously recovered carriers. Evidence requires ${state.mission.sampleCount} samples, at least two corrections, a revisit and a committed chain.</p>
         <div><button type="button" data-lab-action="correlate">RUN CORRELATION</button><button type="button" data-lab-action="commit">COMMIT TO EVIDENCE</button></div>
       </article>
     </section>`;
@@ -407,14 +395,14 @@ function renderNavigation() {
 
       <aside class="world-module vector-inspector">
         <header><span>SELECTED SKY VECTOR</span><b>${sector.risk}</b></header>
-        <h3>${sector.name}</h3>
-        <div class="vector-compass"><i style="--bearing:${sector.x * 2.8}deg"></i><b>N</b><span>E</span><em>S</em><small>W</small></div>
+        <h3>${state.activeTarget.name}</h3>
+        <div class="vector-compass"><i style="--bearing:${state.astronomy.azimuthDeg}deg"></i><b>N</b><span>E</span><em>S</em><small>W</small></div>
         <dl>
-          <div><dt>VISIBILITY</dt><dd>${sector.visibility}%</dd></div>
-          <div><dt>OBSERVING WINDOW</dt><dd>${sector.window}</dd></div>
-          <div><dt>RANGE MARKER</dt><dd>${sector.range.toLocaleString()} LY</dd></div>
-          <div><dt>FIELD CONDITION</dt><dd>${sector.risk}</dd></div>
-          <div><dt>AIR MASS</dt><dd>${(1.04 + (100 - sector.visibility) / 73).toFixed(2)}</dd></div>
+          <div><dt>ALTITUDE</dt><dd>${state.astronomy.altitudeDeg.toFixed(1)}°</dd></div>
+          <div><dt>AZIMUTH</dt><dd>${state.astronomy.azimuthDeg.toFixed(1)}°</dd></div>
+          <div><dt>OBSERVING WINDOW</dt><dd>${state.astronomy.windowLabel}</dd></div>
+          <div><dt>VISIBILITY</dt><dd>${state.astronomy.visible ? 'VISIBLE' : 'BELOW LIMIT'}</dd></div>
+          <div><dt>AIR MASS</dt><dd>${Number.isFinite(state.astronomy.airMass) ? state.astronomy.airMass.toFixed(2) : '—'}</dd></div>
         </dl>
         <button type="button" data-nav-action="schedule">SCHEDULE OBSERVATION <b>→</b></button>
       </aside>
@@ -481,6 +469,54 @@ function renderVault() {
     </section>`;
 }
 
+function renderSystems() {
+  const spaceWeather = state.sources.spaceWeather;
+  const astronomy = state.sources.astronomy;
+  const activeCommand = state.commands.find((command) => ['QUEUED', 'RUNNING'].includes(command.status));
+  const evidence = selectDecodeEvidence(rootState);
+  return `
+    <section class="systems-world-grid">
+      <article class="world-module systems-provenance">
+        <header><span>DATA SOURCE REGISTRY</span><b>PROVENANCE VISIBLE</b></header>
+        <div class="source-registry">
+          <article data-source-status="${spaceWeather.status}"><i></i><span><b>${spaceWeather.source}</b><small>Solar wind, IMF, Bz and Kp / ${spaceWeather.sourceTimestamp || 'no source timestamp'}</small></span><em>${spaceWeather.status}</em></article>
+          <article data-source-status="${astronomy.status}"><i></i><span><b>${astronomy.source}</b><small>Sidereal time, altitude, azimuth and Sun altitude / ${state.station.coordinates.label}</small></span><em>${astronomy.status}</em></article>
+        </div>
+        <p class="scientific-note">Deep Space Array 7 is fictional. Coordinates are configured solely for the simulation. “14,000 years” describes signal travel time, not proven continuous broadcasting duration.</p>
+      </article>
+      <article class="world-module resource-console">
+        <header><span>RESOURCE ENVELOPE</span><b>COUPLED</b></header>
+        <dl>
+          <div><dt>MAIN POWER</dt><dd>${state.resources.mainPower.toFixed(1)}%</dd></div>
+          <div><dt>RESERVE POWER</dt><dd>${state.resources.reservePower.toFixed(1)}%</dd></div>
+          <div><dt>CRYOGENIC RESERVE</dt><dd>${state.resources.cryogenicReserve.toFixed(1)}%</dd></div>
+          <div><dt>THERMAL LOAD</dt><dd>${state.resources.thermalLoad.toFixed(1)}%</dd></div>
+          <div><dt>DATA BUFFER</dt><dd>${state.resources.dataBuffer.toFixed(1)}%</dd></div>
+          <div><dt>PROCESSING LOAD</dt><dd>${state.resources.processingLoad.toFixed(1)}%</dd></div>
+        </dl>
+      </article>
+      <article class="world-module render-console">
+        <header><span>RENDER QUALITY</span><b>${state.render.quality}</b></header>
+        <div class="baseline-choices">
+          ${['HIGH', 'BALANCED', 'BATTERY', 'REDUCED_MOTION'].map((quality) => `<button type="button" data-quality="${quality}" class="${state.render.quality === quality ? 'active' : ''}"><i></i><span>${quality}</span><small>${quality === 'HIGH' ? '60 FPS target / DPR 2' : quality === 'BALANCED' ? '30 FPS target / adaptive detail' : quality === 'BATTERY' ? 'Low-power canvases / DPR 1' : 'Static scientific views'}</small></button>`).join('')}
+        </div>
+      </article>
+      <article class="world-module command-sequence">
+        <header><span>COMMAND BUS</span><b>${activeCommand ? activeCommand.status : 'IDLE'}</b></header>
+        <div>${activeCommand ? `<p><time>${Math.round(activeCommand.progress * 100)}%</time><span>${activeCommand.label}</span><b>${activeCommand.id}</b></p>` : '<p class="world-empty">The observatory command bus is clear.</p>'}</div>
+        <button type="button" data-array-action="diagnostic">RUN FULL ARRAY DIAGNOSTIC <b>→</b></button>
+      </article>
+      <article class="world-module provenance-ledger">
+        <header><span>INTEGRITY + PERSISTENCE</span><b>${rootState.sessionMode.mode}</b></header>
+        <dl>
+          <div><dt>DECODE READY</dt><dd>${selectDecodeReady(rootState) ? 'YES' : 'NO'}</dd></div>
+          ${Object.entries(evidence).map(([key, complete]) => `<div><dt>${key.toUpperCase()}</dt><dd>${complete ? 'VERIFIED' : 'PENDING'}</dd></div>`).join('')}
+          <div><dt>SESSION STORAGE</dt><dd>${rootState.sessionMode.durable ? 'DURABLE' : 'LOCAL ONLY'}</dd></div>
+        </dl>
+      </article>
+    </section>`;
+}
+
 function getSessionSuffix() {
   try {
     return sessionStorage.getItem('tls:session-id:v1')?.slice(-12) || 'UNRESOLVED';
@@ -500,13 +536,37 @@ function handleWorldClick(event) {
   const dish = event.target.closest('[data-select-dish]');
   if (dish) { state.selectedDish = dish.dataset.selectDish; persist(); renderWorld(); return; }
   const candidate = event.target.closest('[data-select-candidate]');
-  if (candidate) { state.selectedCandidate = candidate.dataset.selectCandidate; state.lab.confidenceBonus = 0; persist(); renderWorld(); return; }
+  if (candidate) {
+    state.selectedCandidate = candidate.dataset.selectCandidate;
+    state.activeTarget = { ...findCatalogTarget(state.selectedCandidate) };
+    state.mission.stage = 'TARGET_SELECTED';
+    state.mission.integrationSeconds = 0;
+    state.lab.confidenceBonus = 0;
+    queueCommand(state, 'SLEW_TARGET', { targetId: state.selectedCandidate });
+    persist(); renderWorld(); return;
+  }
   const sector = event.target.closest('[data-select-sector]');
-  if (sector) { state.selectedSector = sector.dataset.selectSector; persist(); renderWorld(); return; }
+  if (sector) {
+    state.selectedSector = sector.dataset.selectSector;
+    const sectorIndex = Math.max(0, SKY_SECTORS.findIndex((item) => item.id === state.selectedSector));
+    const target = SIGNAL_CANDIDATES[sectorIndex % SIGNAL_CANDIDATES.length];
+    state.selectedCandidate = target.id;
+    state.activeTarget = { ...findCatalogTarget(target.id) };
+    state.mission.stage = 'TARGET_SELECTED';
+    state.mission.integrationSeconds = 0;
+    queueCommand(state, 'SLEW_TARGET', { targetId: target.id });
+    persist(); renderWorld(); return;
+  }
   const filter = event.target.closest('[data-toggle-filter]');
   if (filter) {
-    state.lab.filters[filter.dataset.toggleFilter] = !state.lab.filters[filter.dataset.toggleFilter];
-    addEvent('FORENSIC STACK UPDATED', `${filter.dataset.toggleFilter.toUpperCase()} correction ${state.lab.filters[filter.dataset.toggleFilter] ? 'engaged' : 'removed'}.`, 'info');
+    const command = {
+      rfi: 'APPLY_RFI',
+      doppler: 'APPLY_DOPPLER',
+      phase: 'APPLY_PHASE',
+      fold: 'APPLY_FOLD',
+    }[filter.dataset.toggleFilter];
+    const result = queueCommand(state, command, { candidateId: state.selectedCandidate });
+    toast(result.accepted ? `${result.command.label} queued.` : 'That correction is already running.', result.accepted ? 'info' : 'warning');
     persist(); renderWorld(); return;
   }
   const action = event.target.closest('[data-array-action]');
@@ -518,11 +578,22 @@ function handleWorldClick(event) {
   const baseline = event.target.closest('[data-baseline]');
   if (baseline) {
     state.navigation.baseline = baseline.dataset.baseline;
+    state.array.baseline = baseline.dataset.baseline;
     addEvent('BASELINE GEOMETRY CHANGED', `${baseline.dataset.baseline} array geometry selected for the next integration.`, 'info');
     persist(); renderWorld(); return;
   }
   const vaultAction = event.target.closest('[data-vault-action]');
-  if (vaultAction) runVaultAction(vaultAction.dataset.vaultAction);
+  if (vaultAction) { runVaultAction(vaultAction.dataset.vaultAction); return; }
+  const quality = event.target.closest('[data-quality]')?.dataset.quality;
+  if (quality) {
+    state.render.quality = quality;
+    rootState.settings.renderQuality = quality;
+    rootState.settings.reducedMotion = quality === 'REDUCED_MOTION';
+    document.documentElement.classList.toggle('motion-reduced', rootState.settings.reducedMotion);
+    document.dispatchEvent(new CustomEvent('tls:render-quality', { detail: { quality } }));
+    persist();
+    renderWorld();
+  }
 }
 
 function handleWorldInput(event) {
@@ -540,33 +611,19 @@ function recordArrayAction(label, result) {
 
 function runArrayAction(action) {
   const dish = ARRAY_NODES.find((item) => item.id === state.selectedDish) || ARRAY_NODES[0];
-  if (action === 'calibrate') {
-    state.array.phaseError = clamp(state.array.phaseError * .43, .12, 3);
-    state.array.integrity = clamp(state.array.integrity + 1.1, 0, 99.8);
-    recordArrayAction('CALIBRATE BASELINES', `${state.array.phaseError.toFixed(2)} mrad`);
-    addEvent('BASELINE CALIBRATION COMPLETE', `Phase disagreement reduced to ${state.array.phaseError.toFixed(2)} milliradians.`, 'nominal');
-    toast('Six-node baseline calibration committed.', 'success');
-  } else if (action === 'cryo') {
-    state.array.cryoReserve = clamp(state.array.cryoReserve - 9, 8, 100);
-    state.array.integrity = clamp(state.array.integrity + .5, 0, 99.8);
-    recordArrayAction('FLUSH CRYO LOOP', `${state.array.cryoReserve}% reserve`);
-    addEvent('CRYOGENIC RESERVE ENGAGED', 'Receiver temperature returned inside the narrowband stability envelope.', 'nominal');
-    toast('Reserve cryogenic loop flushed.', 'success');
-  } else if (action === 'power') {
-    state.array.reservePower = clamp(state.array.reservePower - 7, 5, 100);
-    state.array.integrity = clamp(state.array.integrity + .8, 0, 99.8);
-    recordArrayAction('REROUTE POWER', `${state.array.reservePower}% reserve`);
-    addEvent('POWER BUS REROUTED', 'Non-essential lighting was isolated; receiver gain now has priority.', 'info');
-    toast('Power routed to receiver systems.', 'success');
-  } else if (action === 'park') {
-    recordArrayAction(`PARK ${dish.id}`, 'SAFE ELEVATION');
-    addEvent('APERTURE PARK COMMAND', `${dish.id} moved to its low-wind safe elevation.`, 'warning');
-    toast(`${dish.id} parked.`, 'info');
-  } else if (action === 'diagnostic') {
-    state.array.integrity = clamp(state.array.integrity - .2 + Math.random() * .8, 0, 99.8);
-    recordArrayAction('FULL ARRAY DIAGNOSTIC', '6/6 PASS');
-    addEvent('DIAGNOSTIC SEQUENCE COMPLETE', 'Servo, timing, cryogenic and receiver paths passed all local checks.', 'nominal');
-    toast('Full array diagnostic passed.', 'success');
+  const type = {
+    calibrate: 'CALIBRATE_BASELINES',
+    cryo: 'FLUSH_CRYO',
+    power: 'REROUTE_POWER',
+    park: 'PARK_DISH',
+    diagnostic: 'FULL_DIAGNOSTIC',
+  }[action];
+  const result = queueCommand(state, type, { dishId: dish.id });
+  if (result.accepted) {
+    recordArrayAction(result.command.label, 'QUEUED');
+    toast(`${result.command.label} queued on the timed command bus.`, 'info');
+  } else {
+    toast('That command is already queued or running.', 'warning');
   }
   persist(); renderWorld();
 }
@@ -574,23 +631,14 @@ function runArrayAction(action) {
 function runLabAction(action) {
   const candidate = selectedCandidate();
   if (action === 'correlate') {
-    const active = Object.values(state.lab.filters).filter(Boolean).length;
-    const gain = 7 + active * 4 + Math.round(Math.random() * 8);
-    state.lab.correlation = clamp(state.lab.correlation + gain, 1, 96);
-    state.lab.confidenceBonus = clamp(state.lab.confidenceBonus + Math.max(2, active * 2), 0, 18);
-    addEvent('CROSS-CORRELATION COMPLETE', `${candidate.id} reached a ${state.lab.correlation}% nearest-catalogue match.`, state.lab.correlation > 70 ? 'signal' : 'info');
-    toast(`Correlation result: ${state.lab.correlation}% match.`, 'success');
+    const result = queueCommand(state, 'RUN_CORRELATION', { candidateId: candidate.id });
+    toast(result.accepted ? 'Catalogue correlation queued.' : 'Correlation is already running.', result.accepted ? 'info' : 'warning');
   } else if (action === 'commit') {
-    if (!state.lab.committed.includes(candidate.id)) state.lab.committed.push(candidate.id);
-    const entry = {
-      time: nowCode(),
-      title: `${candidate.id} FORENSIC COMMIT`,
-      detail: `${state.lab.correlation}% correlation / ${Object.values(state.lab.filters).filter(Boolean).length} corrections active`,
-    };
-    state.vault.entries.unshift(entry);
-    state.vault.entries = state.vault.entries.slice(0, 20);
-    addEvent('EVIDENCE ITEM COMMITTED', `${candidate.id} analysis entered the local provenance chain.`, 'signal');
-    toast('Forensic result committed to Evidence Vault.', 'success');
+    const result = queueCommand(state, 'COMMIT_EVIDENCE', { candidateId: candidate.id });
+    toast(
+      result.accepted ? 'Evidence commit queued; prerequisites will be validated on completion.' : 'Evidence commit is already running.',
+      result.accepted ? 'info' : 'warning',
+    );
   }
   persist(); renderWorld();
 }
@@ -598,17 +646,11 @@ function runLabAction(action) {
 function runNavigationAction(action) {
   const sector = SKY_SECTORS.find((item) => item.id === state.selectedSector) || SKY_SECTORS[0];
   if (action === 'schedule') {
-    if (!state.navigation.scheduled.some((item) => item.id === sector.id)) {
-      state.navigation.scheduled.push({ ...sector, baseline: state.navigation.baseline, time: nowCode() });
-      addEvent('OBSERVATION SCHEDULED', `${sector.name} entered the queue using the ${state.navigation.baseline} baseline.`, 'nominal');
-      toast(`${sector.name} added to the observing queue.`, 'success');
-    } else {
-      toast('That sky vector is already scheduled.', 'info');
-    }
+    const result = queueCommand(state, 'SCHEDULE_REVISIT', { sectorId: sector.id });
+    toast(result.accepted ? `${sector.name} revisit queued.` : 'That revisit is already queued.', result.accepted ? 'info' : 'warning');
   } else if (action === 'optimize') {
-    state.navigation.scheduled.sort((a, b) => b.visibility - a.visibility);
-    addEvent('NIGHT SCHEDULE OPTIMISED', 'Targets reordered by visibility, air mass and receiver transition cost.', 'info');
-    toast('Observation queue optimised.', 'success');
+    const result = queueCommand(state, 'CONFIRM_REVISIT', { sectorId: sector.id });
+    toast(result.accepted ? 'Independent revisit confirmation queued.' : 'Revisit confirmation is already running.', result.accepted ? 'info' : 'warning');
   }
   persist(); renderWorld();
 }
@@ -640,15 +682,16 @@ function runVaultAction(action) {
 
 function drawWorldCanvases(world) {
   if (!worldOverlay || worldOverlay.hidden) return;
-  if (world === 'array') drawArrayLinks();
+  if (world === 'live-ops') drawArrayLinks();
   if (world === 'lab') { drawLabSpectrum(); drawCorrelation(); }
-  if (world === 'nav') drawBaseline();
+  if (world === 'sky') drawBaseline();
 }
 
 function fitCanvas(canvas) {
   if (!canvas) return null;
   const rect = canvas.getBoundingClientRect();
-  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  const dprCap = state.render.quality === 'BATTERY' ? 1 : state.render.quality === 'BALANCED' ? 1.5 : 2;
+  const ratio = Math.min(window.devicePixelRatio || 1, dprCap);
   const width = Math.max(1, Math.round(rect.width));
   const height = Math.max(1, Math.round(rect.height));
   if (canvas.width !== width * ratio || canvas.height !== height * ratio) {
@@ -695,12 +738,13 @@ function drawLabSpectrum() {
     const normalized = x / width;
     const carrier = Math.exp(-((normalized - .53) ** 2) / (.00018 + candidate.bandwidth * .000012)) * (height * .58);
     const sideband = Math.exp(-((normalized - .59) ** 2) / .00034) * height * .18;
-    const noise = (Math.sin(x * .41 + time * .004) + Math.sin(x * .083 - time * .002)) * (7 - active * .9) + (Math.random() - .5) * (11 - active);
+    const deterministicNoise = Math.sin(x * 1.91 + time * .007) * .5 + Math.sin(x * .173 - time * .003) * .5;
+    const noise = (Math.sin(x * .41 + time * .004) + Math.sin(x * .083 - time * .002)) * (7 - active * .9) + deterministicNoise * (11 - active);
     const y = height * .76 - carrier - sideband + noise;
     if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
   ctx.stroke(); ctx.shadowBlur = 0;
-  worldCanvasFrame = requestAnimationFrame(drawLabSpectrum);
+  if (state.render.quality !== 'REDUCED_MOTION' && !document.hidden) worldCanvasFrame = requestAnimationFrame(drawLabSpectrum);
 }
 
 function drawCorrelation() {
@@ -735,33 +779,44 @@ function drawBaseline() {
 }
 
 function updateLiveTelemetry() {
-  const date = new Date();
-  const seconds = date.getUTCSeconds();
+  const date = new Date(state.clock.utcMs);
   const utc = date.toLocaleTimeString('en-GB', { hour12: false, timeZone: 'UTC' });
-  const lstHours = (date.getUTCHours() + date.getUTCMinutes() / 60 + 6.72) % 24;
-  const lst = `${String(Math.floor(lstHours)).padStart(2, '0')}:${String(Math.floor((lstHours % 1) * 60)).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-  const solar = Math.round(382 + Math.sin(Date.now() * .00007) * 39 + Math.sin(Date.now() * .000019) * 17);
-  const bary = 18.4 + Math.sin(Date.now() * .000021) * 7.6;
-  const clock = 7 + Math.abs(Math.sin(Date.now() * .00013)) * 8;
-  const coherence = .18 + Math.abs(Math.sin(Date.now() * .00031)) * .67;
-  const drift = Math.sin(Date.now() * .00017) * .84;
+  const lst = state.sources.astronomy.value?.lst || '--:--:--';
+  const solar = state.environment.solarWindSpeed;
+  const coherence = state.receiver.coherence;
+  const drift = rootState.telemetry.signal ? Math.sin(state.clock.elapsedMs * .00017) * .84 : 0;
   if ($('#obs-utc')) $('#obs-utc').textContent = utc;
   if ($('#obs-lst')) $('#obs-lst').textContent = lst;
-  if ($('#obs-bary')) $('#obs-bary').textContent = `${bary >= 0 ? '+' : ''}${bary.toFixed(2)} km/s`;
-  if ($('#obs-solar')) $('#obs-solar').textContent = `${solar} km/s`;
-  if ($('#obs-clock')) $('#obs-clock').textContent = `${clock.toFixed(1)} ns`;
+  if ($('#obs-bary')) $('#obs-bary').textContent = `${state.astronomy.altitudeDeg.toFixed(1)}° / ${state.astronomy.azimuthDeg.toFixed(1)}°`;
+  if ($('#obs-solar')) $('#obs-solar').textContent = `${Math.round(solar)} km/s`;
+  if ($('#obs-source-state')) $('#obs-source-state').textContent = state.sources.spaceWeather.status === 'LIVE' ? 'NOAA' : 'SIM';
+  if ($('#obs-clock')) $('#obs-clock').textContent = `${state.array.clockOffsetNs.toFixed(1)} ns`;
   if ($('#obs-coherence')) $('#obs-coherence').textContent = `COHERENCE ${coherence.toFixed(2)}`;
   if ($('#obs-drift')) $('#obs-drift').textContent = `DRIFT ${drift >= 0 ? '+' : ''}${drift.toFixed(2)} Hz/s`;
   if ($('#world-clock')) $('#world-clock').textContent = `${utc} UTC`;
   if ($('#nav-lst')) $('#nav-lst').textContent = lst;
   if ($('#world-bus')) $('#world-bus').textContent = `${(11.8 + coherence * 2.4).toFixed(1)} Gb/s`;
   document.documentElement.style.setProperty('--observatory-pulse', coherence.toFixed(3));
+  if ($('#mission-stage')) $('#mission-stage').textContent = state.mission.stage;
+  if ($('#mission-target-state')) $('#mission-target-state').textContent = state.mission.integrationSeconds >= state.mission.requiredIntegrationSeconds ? 'SAMPLED' : `${Math.round(state.array.slewProgress * 100)}%`;
+  if ($('#mission-lab-state')) $('#mission-lab-state').textContent = `${state.mission.correctionsApplied}/2`;
+  if ($('#mission-revisit-state')) $('#mission-revisit-state').textContent = state.mission.revisitConfirmed ? 'CONFIRMED' : state.mission.revisitScheduled ? 'QUEUED' : 'WAIT';
+  if ($('#mission-evidence-state')) $('#mission-evidence-state').textContent = state.mission.evidenceCommitted ? 'COMMITTED' : 'SEALED';
 
   const currentCarrier = $('#signal-id')?.textContent?.trim() || '';
   if (currentCarrier.startsWith('TLS-') && currentCarrier !== 'TLS-UNRESOLVED' && currentCarrier !== lastKnownCarrier) {
     lastKnownCarrier = currentCarrier;
     addEvent('MAIN RECEIVER CONTACT', `${currentCarrier} entered the active transmission panel.`, 'signal');
   }
+  const activeCommand = state.commands.find((command) => ['QUEUED', 'RUNNING'].includes(command.status));
+  document.body.dataset.commandState = activeCommand?.status || 'IDLE';
+  document.body.dataset.commandType = activeCommand?.type || '';
+  const fingerprint = `${activeCommand?.id || 'idle'}:${activeCommand?.status || 'idle'}:${Math.round((activeCommand?.progress || 0) * 10)}`;
+  if (fingerprint !== lastCommandFingerprint && worldOverlay && !worldOverlay.hidden && document.activeElement?.id !== 'vault-notes') {
+    lastCommandFingerprint = fingerprint;
+    renderWorld();
+  }
+  updateTicker();
 }
 
 function updateTicker() {
@@ -772,17 +827,6 @@ function updateTicker() {
   if (message) message.textContent = event.message;
   const ticker = $('.observatory-event-ticker');
   if (ticker) ticker.dataset.severity = event.severity;
-}
-
-function emitAmbientIncident() {
-  const incident = INCIDENT_LIBRARY[incidentIndex % INCIDENT_LIBRARY.length];
-  incidentIndex += 1;
-  addEvent(incident.title, incident.message, incident.severity);
-  const alert = $('#system-alert');
-  if (alert && !document.body.classList.contains('observatory-world-open')) {
-    alert.classList.add('observatory-echo');
-    setTimeout(() => alert.classList.remove('observatory-echo'), 1200);
-  }
 }
 
 function trapOverlayFocus(event) {
@@ -818,7 +862,6 @@ function initialiseExpansion() {
   updateLiveTelemetry();
   updateTicker();
   setInterval(updateLiveTelemetry, 1000);
-  setInterval(emitAmbientIncident, 22000);
   document.addEventListener('keydown', trapOverlayFocus);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) cancelAnimationFrame(worldCanvasFrame);
