@@ -27,6 +27,10 @@
   overflow: hidden;
 }
 
+.dish-node {
+  transform: translate(-50%, -50%) rotate(var(--angle)) translateX(var(--radius)) rotate(calc(0deg - var(--angle)));
+}
+
 @media (max-width: 1250px) {
   .detection-panel:has(.observatory-deck-launcher) {
     grid-template-rows: 25px minmax(0, 1fr) 38px;
